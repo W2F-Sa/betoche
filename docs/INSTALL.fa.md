@@ -1,25 +1,30 @@
-# راهنمای نصب صفر تا صد (فارسی) — v1.2
+# راهنمای نصب صفر تا صد (فارسی) — v1.3
 
-این راهنما طوری نوشته شده که بتونی **بدون تنظیمات اضافی** پروژه رو روی Vercel دیپلوی کنی، تضمینی کار کنه، و در لاگ‌های Vercel هیچ‌چی غیرعادی به‌چشم نخوره.
+این راهنما طوری نوشته شده که بتونی **بدون تنظیمات اضافی** پروژه رو روی Vercel دیپلوی کنی، تضمینی کار کنه، و در لاگ‌های Vercel **هیچ‌کس** نتونه بفهمه چه ترافیکی رد می‌شه — حتی خودت با دسترسی کامل.
 
 > 🎯 **هدف نهایی:** یه URL مثل `https://your-app.vercel.app` که:
-> - یه سایت پورتفولیو + JSON service serve می‌کنه
+> - سایت پورتفولیو + Feed API به‌نظر کاملاً واقعی serve می‌کنه
 > - ترافیک streaming کلاینتت رو به‌صورت کاملاً مخفی به origin می‌رسونه
-> - در لاگ‌های Vercel، ترافیک فوروارد‌شده درست شبیه XHRهای معمولی سایت به‌نظر میاد
-> - حتی self-monitoring هم چیزی غیرعادی نشون نمیده
+> - در لاگ‌های Vercel، **هیچ tellی** نمی‌مونه — نه `Go-http-client` در User-Agent، نه `?x_padding=XXX` در Referer، نه path غیرعادی
+> - Path الگو `/api/feed/<UUID>/<int>` در لاگ یه pagination cursor عادی به‌نظر میاد، چون **یه پست بلاگ + endpoint OpenAPI روی همون سایت داریم که این URL shape رو توضیح می‌ده**
 
 ---
 
-## مهم‌ترین تغییرات v1.2 نسبت به v1.1
+## مهم‌ترین تغییرات v1.3 نسبت به v1.2
 
-| | v1.0 (Edge) | v1.1 (Node 128 MB) | **v1.2 (Edge + stealth)** |
-|---|---|---|---|
-| Runtime | Edge | Node.js | **Edge (V8 isolate)** ⚡ |
-| Cold start | ~5-50 ms | ~200-500 ms | **~5-50 ms** |
-| `ROUTE` پیش‌فرض | `/abc2` | `/abc2` | **`/api/feed`** |
-| `console.*` در لاگ‌ها | فعال | فعال | **همگی silenced** |
-| header bleach روی response | جزئی | جزئی | **کامل (server, x-powered-by, x-vercel-cache, set-cookie, via, …)** |
-| Header های upstream از client پنهان | بخشی | بخشی | **همه به جز content-type/encoding/language** |
+| | v1.0 | v1.1 | v1.2 | **v1.3 (deep stealth)** |
+|---|---|---|---|---|
+| Runtime | Edge | Node 128MB | Edge | **Edge** ⚡ |
+| Cold start | ~5-50 ms | ~200-500 ms | ~5-50 ms | **~5-50 ms** |
+| `ROUTE` | `/abc2` | `/abc2` | `/api/feed` | **`/api/feed`** |
+| `console.*` | active | active | silenced | **silenced** |
+| Camouflage برای `<UUID>/<int>` | ❌ 404 | ❌ 404 | ❌ 400 | **✅ JSON paginated feed** |
+| Cover story برای endpoint | ندارد | ندارد | ندارد | **✅ پست بلاگ + پروژه `feed-api` + OpenAPI** |
+| `Referer` به origin می‌رسه | ✅ | ✅ | ✅ | **❌ stripped** |
+| `Origin` header به origin می‌رسه | ✅ | ✅ | ✅ | **❌ stripped** |
+| توصیه‌ی `User-Agent` کلاینت | ندارد | ندارد | ندارد | **✅ Chrome UA کامل** |
+| توصیه‌ی `xPaddingHeader` کلاینت | ندارد | ندارد | ندارد | **✅ X-Page-Token (پاک کردن `?x_padding=`)** |
+| Hot path optimization | partial | partial | partial | **✅ inlined prefix test (no allocation)** |
 
 ---
 
@@ -46,7 +51,7 @@
 | **حساب Vercel** | میزبانی | [vercel.com/signup](https://vercel.com/signup) |
 | **حساب GitHub** | میزبانی ریپو | [github.com](https://github.com/) |
 
-> ✅ **هیچ env var لازم نیست.** مقادیر پیش‌فرض `ZONE=https://my.mahandevs.com:444` و `ROUTE=/api/feed` داخل کد baked شدن.
+> ✅ **هیچ env var لازم نیست.** مقادیر پیش‌فرض `ZONE=https://my.mahandevs.com:8080` و `ROUTE=/api/feed` داخل کد baked شدن.
 
 ---
 
@@ -129,41 +134,122 @@ curl -sI "$YOUR_URL/api/feed" | grep -iE 'x-request-id|server-timing|x-api-versi
 
 ### اگه share-link داری
 
-share-link قبلیت چنین چیزی بود:
+share-link **به‌تنهایی برای v1.3 کافی نیست** — بعضی از کلیدهای ضد-tell (مثل `User-Agent` و `xPaddingHeader`) فقط در کانفیگ JSON قابل تنظیمن. به‌شدت توصیه می‌شه به فرمت JSON پایین مهاجرت کنی.
+
+اگه فقط می‌خوای host و path رو سریع تست کنی:
 
 ```
-...&host=OLD_URL&path=%2Fabc2&...
+...&host=YOUR_URL_VERCEL&path=%2Fapi%2Ffeed&extra=%7B%22xPaddingBytes%22%3A%22100-1000%22%2C%22xPaddingHeader%22%3A%22X-Page-Token%22%7D&...
 ```
 
-تغییرش بده به:
+ولی برای stealth واقعی، از کانفیگ JSON کامل پایین استفاده کن.
 
-```
-...&host=YOUR_URL_VERCEL&path=%2Fapi%2Ffeed&...
-```
+### اگه از کانفیگ JSON استفاده می‌کنی — **نسخه کامل v1.3 (با حذف tellهای کلاینت)**
 
-(`%2Fapi%2Ffeed` همان `/api/feed` URL-encoded است.)
+این کانفیگ outbound کامل است که:
 
-### اگه از کانفیگ JSON استفاده می‌کنی
+1. ترافیک رو روی `/api/feed` می‌فرسته
+2. UA رو از `Go-http-client/2.0` به یه UA واقعی Chrome تغییر می‌ده (تا در لاگ‌های Vercel به‌جای "Go-http-client" یه UA معمولی ظاهر بشه)
+3. padding xhttp رو از URL query (`?x_padding=XXX...`) به یه header منتقل می‌کنه — این بزرگ‌ترین tell بود که در `Referer` در لاگ Vercel ظاهر می‌شد
 
 ```json
 {
   "outbounds": [{
+    "tag": "feed-out",
+    "protocol": "vless",
+    "settings": {
+      "vnext": [{
+        "address": "lab-staging-abc123.vercel.app",
+        "port": 443,
+        "users": [{
+          "id": "0a285ffd-f3c0-47fe-bfbd-b01711c8c5a3",
+          "encryption": "none",
+          "flow": ""
+        }]
+      }]
+    },
     "streamSettings": {
+      "network": "xhttp",
+      "security": "tls",
+      "tlsSettings": {
+        "serverName": "lab-staging-abc123.vercel.app",
+        "alpn": ["h2", "http/1.1"],
+        "fingerprint": "chrome",
+        "allowInsecure": false
+      },
       "xhttpSettings": {
         "host": "lab-staging-abc123.vercel.app",
         "path": "/api/feed",
-        "mode": "auto"
+        "mode": "auto",
+        "headers": {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+          "Accept": "application/json, text/plain, */*",
+          "Accept-Language": "en-US,en;q=0.9"
+        },
+        "extra": {
+          "xPaddingBytes": "100-1000",
+          "xPaddingHeader": "X-Page-Token",
+          "noSSEHeader": false,
+          "scMaxEachPostBytes": "1000000",
+          "scMaxBufferedPosts": 30,
+          "scStreamUpServerSecs": "20-80"
+        }
       }
     }
   }]
 }
 ```
 
-> 💡 **در سرور Xray شما هم باید path از `/abc2` به `/api/feed` عوض بشه** تا با ROUTE پیش‌فرض deployment هماهنگ باشه. در کانفیگ سرور Xray، داخل `inbounds[].streamSettings.xhttpSettings.path`:
-> ```json
-> "path": "/api/feed"
-> ```
-> ⚠️ **یا** اگه نمی‌خوای کانفیگ سرور رو دست بزنی، می‌تونی env var `ROUTE` رو در داشبورد Vercel به `/abc2` ست کنی تا با path قدیمی سرورت match بشه. هر دو روش کار می‌کنن.
+> 🎯 **حیاتی‌ترین تغییرات نسبت به کانفیگ v1.2:**
+> - `headers.User-Agent` → یه UA معمولی Chrome (به جای `Go-http-client/2.0`)
+> - `headers.Accept` و `Accept-Language` → شبیه XHRهای واقعی مرورگر
+> - `extra.xPaddingHeader` → `"X-Page-Token"` (به‌جای خالی بودن، که xhttp رو مجبور می‌کنه padding رو در `?x_padding=...` URL بذاره و اون مقدار در `Referer` لاگ Vercel ظاهر می‌شه)
+
+### مقایسه‌ی لاگ Vercel — قبل و بعد
+
+**قبل از v1.3 (هنوز tell داره):**
+```
+POST /api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/0 → 200
+User-Agent: Go-http-client/2.0
+Referer:    https://your-app.vercel.app/api/feed/.../0?x_padding=XXXXXXXXXXX...
+```
+
+**بعد از v1.3 (تمیز):**
+```
+POST /api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/0 → 200
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) ... Chrome/130.0.0.0 Safari/537.36
+Referer:    (none)
+```
+
+این از نظر ساختاری **با درخواست‌هایی که مرورگر واقعی به `/api/feed/<sessionId>/<page>` می‌فرسته (که حالا یه endpoint مستند با OpenAPI schema و یک پست بلاگ توضیح‌دهنده‌ست) قابل تشخیص نیست**.
+
+### و در سرور Xray
+
+`path` رو از `/abc2` (یا هرچی الان هست) به `/api/feed` تغییر بده، و `xPaddingHeader` رو هم در سرور برابر `X-Page-Token` بذار تا padding درست خوانده بشه:
+
+```json
+{
+  "inbounds": [{
+    "port": 8080,
+    "protocol": "vless",
+    "settings": { ... },
+    "streamSettings": {
+      "network": "xhttp",
+      "xhttpSettings": {
+        "path": "/api/feed",
+        "extra": {
+          "xPaddingHeader": "X-Page-Token"
+        }
+      },
+      ...
+    }
+  }]
+}
+```
+
+> ⚠️ **مهم:** اگه `xPaddingHeader` در سرور و کلاینت match نباشه، اتصال شکسته می‌شه. هر دو رو روی `X-Page-Token` بذار، یا هر دو رو روی هر اسم header دلخواه دیگه (`X-Cursor`, `X-Token-V2`, …) — اسمش مهم نیست، فقط باید match باشه.
+
+> ✅ **یا** اگه نمی‌خوای کانفیگ سرور Xray رو هم تغییر بدی، در داشبورد Vercel یه env var `ROUTE` ست کن با مقدار همون path قدیمی سرورت (مثلاً `/abc2`). در این حالت log-stealth کم می‌شه ولی اتصال کار می‌کنه.
 
 ---
 
@@ -291,7 +377,7 @@ origin می‌بینه: یه درخواست تمیز با فقط headerهای و
 
 ۱. مطمئن شو path در کانفیگ کلاینت `/api/feed` است (نه `/abc2`).
 ۲. مطمئن شو path در کانفیگ سرور Xray هم `/api/feed` است (یا env var `ROUTE` رو در Vercel به `/abc2` ست کن).
-۳. مطمئن شو سرور Xrayت روی `https://my.mahandevs.com:444` آنلاین است.
+۳. مطمئن شو سرور Xrayت روی `https://my.mahandevs.com:8080` آنلاین است.
 
 ### مشکل: نمی‌دونم در لاگ‌های Vercel کدوم درخواست‌ها مال streaming و کدوم مال سایت هستن
 

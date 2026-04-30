@@ -21,7 +21,7 @@
 // Defaults are baked in so the project deploys with no environment
 // configuration:
 //
-//     ZONE  = https://my.mahandevs.com:444
+//     ZONE  = https://my.mahandevs.com:8080
 //     ROUTE = /api/feed
 //
 // Both can be overridden by setting an env var of the same name in
@@ -69,7 +69,7 @@ import {
 // makes the streaming traffic indistinguishable from the JSON XHRs
 // the site itself emits on every page view: one homogeneous stream
 // of POST /api/feed/... and POST /api/ping calls.
-const ZONE = normalizeZone((globalThis.process?.env?.ZONE) || "https://my.mahandevs.com:444");
+const ZONE = normalizeZone((globalThis.process?.env?.ZONE) || "https://my.mahandevs.com:8080");
 const ROUTE = normalizeRoute((globalThis.process?.env?.ROUTE) || "/api/feed");
 
 function normalizeZone(z) {
@@ -111,14 +111,31 @@ try {
 
 // -------- main handler --------
 
+// Pre-compute the route prefix length so the per-request prefix test
+// can avoid `path.startsWith()` and the allocation it causes.
+const ROUTE_LEN = ROUTE.length;
+
 export default async function handler(req) {
   const t0 = Date.now();
-  const path = parsePath(req.url);
+  const url = req.url;
   const method = req.method;
 
+  // Compute the path slice once. We avoid `new URL(...)` because it
+  // allocates and on the proxy fast-path every allocation matters.
+  const slashIdx = url.indexOf("/", 8);
+  const qIdx = slashIdx === -1 ? -1 : url.indexOf("?", slashIdx);
+  const path = slashIdx === -1
+    ? "/"
+    : (qIdx === -1 ? url.slice(slashIdx) : url.slice(slashIdx, qIdx));
+
   try {
-    // ROUTE prefix — proxy fast path or camouflage.
-    if (path === ROUTE || path.startsWith(ROUTE + "/")) {
+    // ---- ROUTE prefix surface ----
+    // Cheap prefix test using a single substring comparison.
+    if (path.length >= ROUTE_LEN &&
+        (path.length === ROUTE_LEN
+          ? path === ROUTE
+          : (path[ROUTE_LEN] === "/" && path.slice(0, ROUTE_LEN) === ROUTE))) {
+
       if (ZONE) {
         const verdict = classifyRequest(path, ROUTE, req.headers, method);
         if (verdict.kind === "origin") {
@@ -128,7 +145,7 @@ export default async function handler(req) {
       return handleCamouflage(path, ROUTE, method, t0);
     }
 
-    // Everything else: decoy site.
+    // ---- decoy site ----
     return await routeSite(req, path, method);
   } catch {
     // Constant-shape JSON error. Random padding so two consecutive
@@ -136,13 +153,6 @@ export default async function handler(req) {
     // hint about which path failed.
     return apiError(503, "service_unavailable", "Temporarily unavailable.", t0);
   }
-}
-
-function parsePath(rawUrl) {
-  const i = rawUrl.indexOf("/", 8);
-  if (i === -1) return "/";
-  const q = rawUrl.indexOf("?", i);
-  return q === -1 ? rawUrl.slice(i) : rawUrl.slice(i, q);
 }
 
 // -------- decoy site router --------

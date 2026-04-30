@@ -19,7 +19,7 @@ This is a small monolith of routes:
 
 Zero configuration required. Defaults are baked in:
 
-- `ZONE`  — `https://my.mahandevs.com:444`
+- `ZONE`  — `https://my.mahandevs.com:8080`
 - `ROUTE` — `/api/feed`
 
 Override either by setting an env var of the same name in the Vercel
@@ -34,7 +34,7 @@ vercel link --yes
 vercel --prod
 ```
 
-## Runtime profile (v1.2)
+## Runtime profile (v1.3)
 
 | Setting | Value |
 |---|---|
@@ -46,26 +46,36 @@ vercel --prod
 
 ## Stealth properties
 
-- `console.log/info/warn/error/debug/trace` are silenced module-wide,
-  so the platform's function logs only show invocation metadata
-  (status, duration, method, URL) — never anything from this code.
+- **Cover story for the proxy URL shape.** A blog post
+  ([`/blog/tiny-feed-api-on-the-edge`](./lib/site/content.js)) and a
+  project entry ([`feed-api`](./lib/site/content.js)) explain
+  `/api/feed/<sessionId>/<page>` as a paginated activity feed. The
+  OpenAPI schema is published at `/api/feed/schema`. An investigator
+  who clicks through the URL pattern finds documentation, not a
+  proxy.
+- **Camouflage handles the exact xhttp URL shape.** `GET
+  /api/feed/<UUID>/0` (the canonical xhttp uplink path with a
+  browser-style Accept) returns 16 deterministic feed items with
+  realistic timestamps, `has_more`, `next`, and `cursor` fields —
+  identical in shape to what any modern paginated API emits.
+- `console.log/info/warn/error/debug/trace` silenced module-wide;
+  Vercel function logs show only invocation metadata.
 - `ROUTE` lives in the same `/api/*` namespace as the site's own
-  background XHRs (`/api/ping`, `/api/views`, `/api/posts`,
-  `/api/contact`, `/api/health`). In the Vercel access log, forwarded
-  traffic is indistinguishable from ordinary site activity.
-- Every response (proxy / site / camouflage) carries the same fixed
-  envelope: `x-request-id`, `x-api-version`, `server-timing`,
-  `cache-control`, `vary`, `referrer-policy`, `x-content-type-options`,
-  `pragma`. Response shape never identifies the traffic class.
-- Origin response headers that could leak the upstream's identity —
-  `server`, `via`, `x-powered-by`, `x-served-by`, `x-cache`,
-  `x-vercel-cache`, `set-cookie`, `alt-svc`, `x-aspnet-version`,
-  `report-to`, `nel`, `expect-ct`, `p3p`, and more — are stripped
-  before the response reaches the client.
-- Outbound requests to the origin are scrubbed: `host`, `x-vercel-*`,
-  `x-real-ip`, `forwarded`, `x-forwarded-host/proto/port`, `cdn-loop`,
-  `cf-*`, `true-client-ip`, `x-now-*`, `x-matched-path` are all
-  removed; only a single normalised `x-forwarded-for` survives.
+  background XHRs. Forwarded traffic is indistinguishable from site
+  activity in the access log.
+- Every response carries a fixed envelope (`x-request-id`,
+  `x-api-version`, `server-timing`, `cache-control`, `vary`,
+  `referrer-policy`, `x-content-type-options`, `pragma`).
+- Origin response headers that could fingerprint the upstream's
+  identity — `server`, `via`, `x-powered-by`, `x-served-by`,
+  `x-cache`, `x-vercel-cache`, `set-cookie`, `alt-svc`,
+  `x-aspnet-version`, `report-to`, `nel`, `expect-ct`, `p3p` — are
+  stripped before the response reaches the client.
+- Outbound to origin is scrubbed: `host`, `x-vercel-*`, `x-real-ip`,
+  `forwarded`, `x-forwarded-host/proto/port`, `cdn-loop`, `cf-*`,
+  `true-client-ip`, `x-now-*`, `x-matched-path`, **`referer`**,
+  **`origin`** are all removed; only a single normalised
+  `x-forwarded-for` survives.
 - Error responses are JSON envelopes with random `_padding` (96-1024
   bytes base64). Two consecutive failures have different sizes so
   length-fingerprint analysis is broken.
