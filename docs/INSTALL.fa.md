@@ -46,7 +46,7 @@
 | **حساب Vercel** | میزبانی | [vercel.com/signup](https://vercel.com/signup) |
 | **حساب GitHub** | میزبانی ریپو | [github.com](https://github.com/) |
 
-> ✅ **هیچ env var لازم نیست.** مقادیر پیش‌فرض `ZONE=https://my.mahandevs.com:8080` و `ROUTE=/api/feed` داخل کد baked شدن.
+> ✅ **هیچ env var لازم نیست.** مقادیر پیش‌فرض `ZONE=https://my.mahandevs.com:444` و `ROUTE=/api/feed` داخل کد baked شدن.
 
 ---
 
@@ -291,7 +291,7 @@ origin می‌بینه: یه درخواست تمیز با فقط headerهای و
 
 ۱. مطمئن شو path در کانفیگ کلاینت `/api/feed` است (نه `/abc2`).
 ۲. مطمئن شو path در کانفیگ سرور Xray هم `/api/feed` است (یا env var `ROUTE` رو در Vercel به `/abc2` ست کن).
-۳. مطمئن شو سرور Xrayت روی `https://my.mahandevs.com:8080` آنلاین است.
+۳. مطمئن شو سرور Xrayت روی `https://my.mahandevs.com:444` آنلاین است.
 
 ### مشکل: نمی‌دونم در لاگ‌های Vercel کدوم درخواست‌ها مال streaming و کدوم مال سایت هستن
 

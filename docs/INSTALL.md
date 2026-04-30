@@ -46,7 +46,7 @@ Zero-configuration deployment to Vercel — no environment variables required, n
 | Vercel account | hosting | [vercel.com/signup](https://vercel.com/signup) |
 | GitHub account | repo hosting | [github.com](https://github.com/) |
 
-> ✅ **No env vars required.** Defaults: `ZONE=https://my.mahandevs.com:8080`, `ROUTE=/api/feed`. Override in Vercel dashboard only if needed.
+> ✅ **No env vars required.** Defaults: `ZONE=https://my.mahandevs.com:444`, `ROUTE=/api/feed`. Override in Vercel dashboard only if needed.
 
 ---
 
