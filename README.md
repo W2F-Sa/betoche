@@ -1,5 +1,12 @@
 # vercel-xhttp-relay
 
+> 📦 **A standalone, ready-to-publish copy of this project lives in
+> [`new-repo/`](./new-repo/)** — copy that folder into a fresh GitHub
+> repository (or run `new-repo/scripts/init-new-repo.sh`) and follow
+> [`new-repo/docs/INSTALL.fa.md`](./new-repo/docs/INSTALL.fa.md) (Persian)
+> or [`new-repo/docs/INSTALL.md`](./new-repo/docs/INSTALL.md) (English)
+> for the full zero-to-running guide.
+
 A **Vercel Edge Function** that does two jobs in a single deployment:
 
 1. **Streams XHTTP traffic** from your Xray/V2Ray client to a backend

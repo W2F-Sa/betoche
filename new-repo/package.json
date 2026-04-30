@@ -1,0 +1,11 @@
+{
+  "name": "vercel-xhttp-stealth-relay",
+  "version": "1.0.0",
+  "description": "Stealth XHTTP relay for Xray/V2Ray on Vercel — proxy traffic disguised as a real REST API, fronted by a realistic developer-portfolio site.",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  }
+}
