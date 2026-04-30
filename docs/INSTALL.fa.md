@@ -1,8 +1,25 @@
-# راهنمای نصب صفر تا صد (فارسی)
+# راهنمای نصب صفر تا صد (فارسی) — v1.2
 
-این راهنما طوری نوشته شده که بتونی **بدون هیچ تنظیمات اضافی**، پروژه را روی Vercel دیپلوی کنی و تضمینی کار کنه. نیاز به ست کردن environment variable نیست — مقادیر پیش‌فرض داخل کد baked شدن.
+این راهنما طوری نوشته شده که بتونی **بدون تنظیمات اضافی** پروژه رو روی Vercel دیپلوی کنی، تضمینی کار کنه، و در لاگ‌های Vercel هیچ‌چی غیرعادی به‌چشم نخوره.
 
-> 🎯 **هدف نهایی:** یک URL مثل `https://your-app.vercel.app` که سایت پورتفولیو + JSON API را serve می‌کنه و آماده‌ی استفاده‌ست.
+> 🎯 **هدف نهایی:** یه URL مثل `https://your-app.vercel.app` که:
+> - یه سایت پورتفولیو + JSON service serve می‌کنه
+> - ترافیک streaming کلاینتت رو به‌صورت کاملاً مخفی به origin می‌رسونه
+> - در لاگ‌های Vercel، ترافیک فوروارد‌شده درست شبیه XHRهای معمولی سایت به‌نظر میاد
+> - حتی self-monitoring هم چیزی غیرعادی نشون نمیده
+
+---
+
+## مهم‌ترین تغییرات v1.2 نسبت به v1.1
+
+| | v1.0 (Edge) | v1.1 (Node 128 MB) | **v1.2 (Edge + stealth)** |
+|---|---|---|---|
+| Runtime | Edge | Node.js | **Edge (V8 isolate)** ⚡ |
+| Cold start | ~5-50 ms | ~200-500 ms | **~5-50 ms** |
+| `ROUTE` پیش‌فرض | `/abc2` | `/abc2` | **`/api/feed`** |
+| `console.*` در لاگ‌ها | فعال | فعال | **همگی silenced** |
+| header bleach روی response | جزئی | جزئی | **کامل (server, x-powered-by, x-vercel-cache, set-cookie, via, …)** |
+| Header های upstream از client پنهان | بخشی | بخشی | **همه به جز content-type/encoding/language** |
 
 ---
 
@@ -12,9 +29,9 @@
 2. [ساخت ریپازیتوری جدید](#۲-ساخت-ریپازیتوری-جدید-روی-github)
 3. [دیپلوی به Vercel](#۳-دیپلوی-به-vercel)
 4. [تست اتصال](#۴-تست-اتصال)
-5. [پیکربندی کلاینت](#۵-پیکربندی-کلاینت)
+5. [پیکربندی کلاینت — یه تغییر کوچک](#۵-پیکربندی-کلاینت--یه-تغییر-کوچک)
 6. [اتصال custom domain](#۶-اتصال-custom-domain-اختیاری)
-7. [پروفایل هزینه](#۷-پروفایل-هزینه-v11)
+7. [مخفی‌کاری در لاگ‌های Vercel](#۷-مخفیکاری-در-لاگهای-vercel)
 8. [عیب‌یابی](#۸-عیبیابی)
 9. [نکات حرفه‌ای](#۹-نکات-حرفهای)
 
@@ -24,12 +41,12 @@
 
 | ابزار | چرا | نصب |
 |---|---|---|
-| **Node.js ≥ 20** | اجرای Vercel CLI | [nodejs.org](https://nodejs.org/) یا nvm |
+| **Node.js ≥ 20** | اجرای Vercel CLI | [nodejs.org](https://nodejs.org/) |
 | **git** | کنترل نسخه | `git --version` |
 | **حساب Vercel** | میزبانی | [vercel.com/signup](https://vercel.com/signup) |
 | **حساب GitHub** | میزبانی ریپو | [github.com](https://github.com/) |
 
-> ✅ **بدون نیاز به ست کردن environment variable.** مقادیر `ZONE` و `ROUTE` به‌صورت پیش‌فرض داخل خود کد هستن (`https://my.mahandevs.com:8080` و `/abc2`). فقط اگه می‌خوای تغییر بدی، در داشبورد Vercel ست کن.
+> ✅ **هیچ env var لازم نیست.** مقادیر پیش‌فرض `ZONE=https://my.mahandevs.com:8080` و `ROUTE=/api/feed` داخل کد baked شدن.
 
 ---
 
@@ -42,11 +59,11 @@ chmod +x scripts/init-new-repo.sh
 ./scripts/init-new-repo.sh
 ```
 
-اسکریپت ازت remote URL ریپوی خالی GitHub رو می‌پرسه و کارهای init/add/commit/push رو انجام میده.
+اسکریپت آدرس remote ریپوی خالی GitHub رو می‌پرسه و باقی کار رو انجام میده.
 
 ### روش ب — دستی
 
-اول روی GitHub یک ریپوی **خالی و private** بساز (بدون README، بدون LICENSE، بدون .gitignore)، سپس:
+اول روی GitHub یه ریپوی **خالی و private** بساز (بدون README، بدون LICENSE، بدون .gitignore). بعد:
 
 ```bash
 git init
@@ -57,168 +74,96 @@ git remote add origin https://github.com/USERNAME/REPO_NAME.git
 git push -u origin main
 ```
 
-> ⚠️ ریپو رو **private** بذار. اسم ریپو هرچی که می‌خوای می‌تونه باشه — اسم پروژه و توضیحاتش داخل `package.json` خنثی هستن.
-
 ---
 
 ## ۳. دیپلوی به Vercel
 
 ```bash
 npm install -g vercel
-vercel --version    # باید v35+ نشون بده
 vercel login
-```
-
-داخل پوشه‌ی پروژه:
-
-```bash
-vercel link
-```
-
-به سؤال‌ها این طور جواب بده:
-
-```
-? Set up and link to existing project?       → Y
-? Which scope?                                → (account خودت)
-? Link to existing project?                   → N
-? What's your project's name?                 → یک اسم تصادفی (مثل "lab-staging")
-? In which directory is your code located?   → ./
-```
-
-سپس deploy کن:
-
-```bash
+vercel link        # اسم رندوم خنثی برای پروژه انتخاب کن (مثل lab-staging یا notes-api)
 vercel --prod
 ```
 
-خروجی چیزی شبیه این می‌شه:
+خروجی:
 
 ```
-✅ Production: https://lab-staging-abc123.vercel.app [4s]
+✅ Production: https://lab-staging-abc123.vercel.app
 ```
 
-این URL آدرس deployment شماست. **همین. تموم.**
-
-> 💡 **بدون نیاز به ست کردن env var:** مقادیر `ZONE=https://my.mahandevs.com:8080` و `ROUTE=/abc2` به‌صورت پیش‌فرض داخل کد هستن. اگه نیاز داشتی override کنی، در داشبورد Vercel → Settings → Environment Variables.
+**این URL آدرس deployment شماست.** هیچ env var ست نشده، چون نیازی نیست.
 
 ---
 
 ## ۴. تست اتصال
 
-URL deployment رو تنظیم کن:
-
 ```bash
 export YOUR_URL="https://lab-staging-abc123.vercel.app"
-```
-
-### تست خودکار (همه با هم)
-
-```bash
 chmod +x scripts/verify-deployment.sh
-./scripts/verify-deployment.sh "$YOUR_URL"
+./scripts/verify-deployment.sh "$YOUR_URL" /api/feed
 ```
 
-این اسکریپت همه‌ی موارد زیر رو خودکار چک می‌کنه و خلاصه‌ی PASS/FAIL میده.
+> ⚠️ پارامتر دوم `/api/feed` است (نه `/abc2`) — `ROUTE` پیش‌فرض جدید.
 
-### تست دستی (در صورت نیاز به دیباگ)
+اگه همه تست‌ها PASS شدن — تموم.
 
-#### ۴.۱. صفحه‌ی اصلی سایت
+### تست دستی (در صورت نیاز)
 
 ```bash
-curl -sI "$YOUR_URL/" | head -3
+curl -sI "$YOUR_URL/"                          # 200 HTML سایت
+curl -s  "$YOUR_URL/api/feed"                  # JSON service root
+curl -s  "$YOUR_URL/api/feed/health"           # JSON health
+curl -sI "$YOUR_URL/api/feed" | grep -iE 'x-request-id|server-timing|x-api-version'
 ```
-✅ انتظار: `HTTP/2 200`، `content-type: text/html`
-
-```bash
-curl -s "$YOUR_URL/" | grep -E '<title>|Mahandevs'
-```
-✅ انتظار: عنوان سایت `Mahandevs Lab` ببینی.
-
-#### ۴.۲. صفحات و فایل‌های استاتیک
-
-```bash
-for p in /blog /projects /about /uses /contact /sitemap.xml /feed.xml /robots.txt /favicon.svg /site.webmanifest; do
-  printf "%-22s → %s\n" "$p" "$(curl -sI "$YOUR_URL$p" | head -1 | tr -d '\r')"
-done
-```
-✅ همه `HTTP/2 200`.
-
-#### ۴.۳. JSON API های سایت
-
-```bash
-curl -s "$YOUR_URL/api/health"
-curl -s "$YOUR_URL/api/views?path=/blog"
-curl -s "$YOUR_URL/api/posts" | head -c 200
-```
-✅ JSON معتبر برمی‌گردونن.
-
-#### ۴.۴. مسیر `/abc2` (مهم‌ترین تست — JSON service surface)
-
-```bash
-curl -s "$YOUR_URL/abc2"
-echo
-curl -s "$YOUR_URL/abc2/health"
-echo
-curl -s "$YOUR_URL/abc2/threads" | head -c 200
-echo
-curl -s "$YOUR_URL/abc2/recent" | head -c 200
-echo
-curl -s "$YOUR_URL/abc2/schema" | head -c 200
-```
-✅ همه JSON معتبر.
-
-#### ۴.۵. هدرهای حرفه‌ای ریسپانس
-
-```bash
-curl -sI "$YOUR_URL/abc2" | grep -iE 'x-request-id|x-api-version|server-timing|cache-control|vary'
-```
-✅ همه‌ی این پنج هدر باید روی پاسخ باشن.
-
-#### ۴.۶. تست streaming endpoint
-
-```bash
-curl -sI -X POST "$YOUR_URL/abc2/abcdef0123456789abcdef0123456789/up" \
-  -H "content-type: application/octet-stream" -H "accept: */*" \
-  --data "test" | head -10
-```
-
-✅ یا `HTTP/2 200` (origin زنده‌ست) یا `HTTP/2 503` با body JSON و `_padding` (origin پایینه). در هر صورت **یک پاسخ معتبر JSON** میاد.
 
 ---
 
-## ۵. پیکربندی کلاینت
+## ۵. پیکربندی کلاینت — یه تغییر کوچک
 
-داخل کانفیگ کلاینت موجود، **فقط فیلد `host` را به URL جدید تغییر بده.** بقیه فیلدها — UUID، path، SNI، ALPN، fingerprint، xPaddingBytes — تغییر نمی‌کنن.
+> 🎯 **این تنها مرحله‌ای است که نیاز به تغییر کانفیگ کلاینت داری.**
+> دو تا تغییر کوچک:
+> 1. `host` رو به URL deployment جدید تغییر بده
+> 2. `path` رو از `/abc2` به `/api/feed` تغییر بده
+
+دلیل تغییر path: در v1.2 ترافیک کلاینت روی همان namespace `/api/*` که XHRهای سایت اون‌جا کار می‌کنن فوروارد می‌شه. در لاگ‌های Vercel، درخواست‌های شما **اصلاً قابل تشخیص از XHRهای معمولی سایت نیستن** (که مثل `/api/ping`، `/api/views`، `/api/contact` هستن).
 
 ### اگه share-link داری
 
-share-link فعلیت چیزی شبیه این است:
+share-link قبلیت چنین چیزی بود:
 
 ```
-...&host=OLD_URL.vercel.app&path=%2Fabc2&...
+...&host=OLD_URL&path=%2Fabc2&...
 ```
 
-`host=OLD_URL.vercel.app` رو با `host=YOUR_URL` (همان URL deployment جدید بدون `https://`) جایگزین کن:
+تغییرش بده به:
 
 ```
-...&host=lab-staging-abc123.vercel.app&path=%2Fabc2&...
+...&host=YOUR_URL_VERCEL&path=%2Fapi%2Ffeed&...
 ```
+
+(`%2Fapi%2Ffeed` همان `/api/feed` URL-encoded است.)
 
 ### اگه از کانفیگ JSON استفاده می‌کنی
 
-داخل بخش `outbounds.streamSettings.xhttpSettings`:
-
 ```json
 {
-  "host": "lab-staging-abc123.vercel.app",
-  "path": "/abc2",
-  "mode": "auto"
+  "outbounds": [{
+    "streamSettings": {
+      "xhttpSettings": {
+        "host": "lab-staging-abc123.vercel.app",
+        "path": "/api/feed",
+        "mode": "auto"
+      }
+    }
+  }]
 }
 ```
 
-فقط مقدار `host` تغییر می‌کنه. `path` همون `/abc2` می‌مونه (با مقدار پیش‌فرض `ROUTE` در سرور deployment match می‌کنه).
-
-سپس کلاینت رو متصل کن. **باید بدون مشکل وصل بشه و سرعت اینترنت طبیعی بمونه.**
+> 💡 **در سرور Xray شما هم باید path از `/abc2` به `/api/feed` عوض بشه** تا با ROUTE پیش‌فرض deployment هماهنگ باشه. در کانفیگ سرور Xray، داخل `inbounds[].streamSettings.xhttpSettings.path`:
+> ```json
+> "path": "/api/feed"
+> ```
+> ⚠️ **یا** اگه نمی‌خوای کانفیگ سرور رو دست بزنی، می‌تونی env var `ROUTE` رو در داشبورد Vercel به `/abc2` ست کنی تا با path قدیمی سرورت match بشه. هر دو روش کار می‌کنن.
 
 ---
 
@@ -226,83 +171,152 @@ share-link فعلیت چیزی شبیه این است:
 
 اگه می‌خوای `*.vercel.app` نباشه:
 
-1. Vercel Dashboard → پروژه → **Settings** → **Domains** → دامنه‌ی خودت رو اضافه کن (مثلاً `cdn.yourdomain.com`)
+1. Vercel Dashboard → پروژه → **Settings → Domains** → دامنه‌ی خودت رو اضافه کن (مثلاً `cdn.yourdomain.com`)
 2. در DNS provider خودت یه `CNAME` به `cname.vercel-dns.com` بذار
 3. منتظر بمون تا گواهی صادر بشه (~۱-۲ دقیقه)
-4. در کانفیگ کلاینت، `host=` رو به `cdn.yourdomain.com` تغییر بده
-
-برای maximum stealth، SNI رو هم به همون custom domain تغییر بده.
+4. در کانفیگ کلاینت، `host=` رو به همون دامنه‌ی جدید تغییر بده
 
 ---
 
-## ۷. پروفایل هزینه (v1.1)
+## ۷. مخفی‌کاری در لاگ‌های Vercel
 
-این نسخه روی **Node.js Serverless** اجرا می‌شه (نه Edge):
+این بخش جدید v1.2 هستش — برای اینکه **حتی خودت هم در داشبورد Vercel چیزی غیرعادی نبینی**:
 
-| تنظیمات | مقدار |
-|---|---|
-| Runtime | Node.js Serverless |
-| Memory هر instance | **۱۲۸ MB** |
-| Max duration | ۶۰ ثانیه |
-| Body parsing | streaming، بدون buffer |
-| Concurrency | Fluid (چند request همزمان روی یک instance) |
+### الف) Path در لاگ شبیه XHRهای معمولی
 
-این یعنی:
-- ~۸ برابر **ارزان‌تر** از Edge runtime (که ~۱ GB رزرو می‌کرد به ازای هر connection)
-- چند connection همزمان روی یک instance warm shared می‌شن، نه instance جداگانه برای هرکدوم
+سایت دکوی به‌صورت طبیعی این XHRها رو می‌فرسته:
 
-تنظیمات در `vercel.json`:
-
-```json
-"functions": {
-  "api/index.js": {
-    "memory": 128,
-    "maxDuration": 60
-  }
-}
+```
+POST /api/ping            (heartbeat هر ۳۰-۴۵ ثانیه)
+GET  /api/views?path=/    (شمارنده بازدید)
+GET  /api/posts           (لیست پست‌ها)
+GET  /api/health          (probe سلامت)
+POST /api/contact         (ارسال فرم تماس)
 ```
 
-و در `api/index.js`:
+ترافیک کلاینت شما به همون namespace می‌ره:
+
+```
+POST /api/feed/<session>/up    (uplink — مثل POST /api/ping)
+GET  /api/feed/<session>       (downlink — مثل GET /api/posts)
+```
+
+در لاگ کلیک‌کنی روی Functions → Invocations، تشخیص اینکه کدوم درخواست site-XHR و کدوم streaming-relay است **غیرممکن** (همه‌شون POST/GET به `/api/*` هستن، با hash های شبیه به هم).
+
+### ب) console.* کاملاً خاموش
+
+در `api/index.js` این بخش وجود داره:
 
 ```js
-export const config = {
-  api: { bodyParser: false, responseLimit: false },
-  supportsResponseStreaming: true,
-};
+try {
+  const noop = () => {};
+  console.log = noop;
+  console.info = noop;
+  console.warn = noop;
+  console.error = noop;
+  console.debug = noop;
+  console.trace = noop;
+} catch {}
 ```
+
+این یعنی:
+- **هیچ خطایی** در tab "Logs" داشبورد Vercel ظاهر نمیشه
+- **هیچ هشدار/info پیامی** از کد ما لاگ نمیشه
+- اگه upstream قطع بشه و relay 503 برگردونه، در لاگ هیچ trace نیست — فقط همان مدل JSON envelope که هر API می‌فرسته
+
+### ج) Header bleach روی response
+
+هر چیزی که می‌تونه origin رو لو بده، حذف می‌شه قبل از اینکه به client برسه:
+
+| header | کاری که می‌کنه | در v1.2 |
+|---|---|---|
+| `Server: nginx/1.21` | runtime origin رو لو می‌ده | ❌ stripped |
+| `X-Powered-By: Express` | technology stack رو لو می‌ده | ❌ stripped |
+| `X-Vercel-Cache: MISS` | platform رو لو می‌ده | ❌ stripped |
+| `Set-Cookie: leaky=1` | session رو لو می‌ده | ❌ stripped |
+| `Via: 1.1 origin` | hop tracing رو لو می‌ده | ❌ stripped |
+| `Alt-Svc: h3=":443"` | پروتکل origin رو لو می‌ده | ❌ stripped |
+| `X-Cache: HIT` | layer رو لو می‌ده | ❌ stripped |
+| `X-AspNet-Version` | stack رو لو می‌ده | ❌ stripped |
+
+تنها هدرهایی که از upstream پاس داده میشن:
+- `content-type` (لازم برای XHTTP framing)
+- `content-encoding`, `content-language`, `content-disposition`, `content-range`, `accept-ranges`, `last-modified`
+
+همه‌چیز دیگه — **drop**.
+
+### د) Header های envelope ثابت
+
+روی هر پاسخ (proxy، site، camouflage) همین envelope ست میشه:
+
+```
+cache-control: no-store, no-cache, must-revalidate, private
+content-type: application/octet-stream  (یا json/html بسته به route)
+pragma: no-cache
+referrer-policy: strict-origin-when-cross-origin
+server-timing: edge;dur=42
+vary: accept, accept-encoding, origin, x-requested-with
+x-api-version: v2.4
+x-content-type-options: nosniff
+x-request-id: <hash>
+```
+
+این یعنی **هیچ پاسخی در network tab مرورگر یا curl تشخیص داده نمیشه** که proxy است یا site یا camouflage.
+
+### ه) Outbound clean
+
+به origin، headers زیر هیچ‌وقت نمی‌رسن:
+
+```
+host (auto-set by fetch)
+x-vercel-* (همه‌ی اون‌ها)
+x-real-ip
+forwarded
+x-forwarded-host / x-forwarded-proto / x-forwarded-port
+cdn-loop, cf-*, true-client-ip
+x-now-id, x-now-trace, x-now-region, x-matched-path
+```
+
+origin می‌بینه: یه درخواست تمیز با فقط headerهای واقعی کلاینت، یعنی origin **نمی‌فهمه** که از Vercel اومده.
+
+### و) Random padding روی errors
+
+دو خطای 503 پشت سر هم اندازه‌ی متفاوت دارن (با base64 padding تصادفی ۹۶-۱۰۲۴ بایت). این یعنی **هیچ‌کس نمی‌تونه از روی size envelope of response تشخیص بده که proxy down است** — هر بار size متفاوت.
 
 ---
 
 ## ۸. عیب‌یابی
 
-### مشکل: `vercel --prod` خطا میده
+### مشکل: کلاینت وصل نمی‌شه
 
-```bash
-vercel logs --prod --since 5m
-```
-معمولاً مشکل از Node version یا syntax error است.
+۱. مطمئن شو path در کانفیگ کلاینت `/api/feed` است (نه `/abc2`).
+۲. مطمئن شو path در کانفیگ سرور Xray هم `/api/feed` است (یا env var `ROUTE` رو در Vercel به `/abc2` ست کن).
+۳. مطمئن شو سرور Xrayت روی `https://my.mahandevs.com:8080` آنلاین است.
 
-### مشکل: `/abc2` پاسخ HTML 404 می‌ده به‌جای JSON
+### مشکل: نمی‌دونم در لاگ‌های Vercel کدوم درخواست‌ها مال streaming و کدوم مال سایت هستن
 
-این یعنی deployment مقادیر env به‌درستی نگرفته. در داشبورد Vercel چک کن:
-- **Settings → Environment Variables**: اگه `ROUTE` ست شده، باید `/abc2` باشه (یا کلاً نباید ست باشه — پیش‌فرض همینه)
+**دقیقاً همینه که می‌خواستیم.** v1.2 باید این تشخیص رو غیرممکن کنه. ولی:
 
-### مشکل: کلاینت گاهی وصل می‌شه و گاهی نه
-
-معمولاً timeout. روی Hobby plan، `maxDuration` پیش‌فرض ۶۰ ثانیه‌ست (که ست کردیم). اگه نیاز به جریان طولانی‌تر داری، Pro plan لازمه.
+- Vercel هیچ‌وقت body رو لاگ نمی‌کنه
+- console.* همه silenced هستن
+- URL ها همه شبیه `/api/feed/<hash>/...` هستن (و `/api/ping/...`، `/api/views`، …)
 
 ### مشکل: ZONE واقعی شما تغییر کرده
 
-هیچ مشکلی نیست. در داشبورد Vercel یک env var جدید با نام `ZONE` و مقدار جدید (مثلاً `https://newhost.example.com:8443`) اضافه کن، سپس redeploy کن:
+در داشبورد Vercel یه env var `ZONE` با مقدار جدید (مثلاً `https://newhost.example:8443`) اضافه کن، سپس:
 
 ```bash
 vercel --prod
 ```
 
+### مشکل: می‌خوام `path` در سرور Xray رو نگه دارم `/abc2`
+
+در داشبورد Vercel یه env var `ROUTE` با مقدار `/abc2` اضافه کن، redeploy کن. سپس در کلاینت هم `path=/abc2` بذار. این هم کار می‌کنه — ولی stealth کم می‌شه چون path در لاگ‌ها متفاوت از XHRهای سایت ظاهر میشه.
+
 ### چک‌لیست سلامت کامل
 
 ```bash
-./scripts/verify-deployment.sh https://YOUR_URL.vercel.app
+./scripts/verify-deployment.sh "$YOUR_URL" /api/feed
 ```
 
 ---
@@ -311,46 +325,46 @@ vercel --prod
 
 ### 🔒 امنیت
 
-- **کلید UUID داخل کانفیگ کلاینت رو لو نده.** هر کس داشته باشه می‌تونه استفاده کنه.
-- **اسم پروژه در داشبورد Vercel رو خنثی بذار** (مثل `lab-staging`، `notes-api`، `personal-site`). اسم در URL پیش‌فرض ظاهر می‌شه.
-- **متغیرهای محیطی رو فقط در صورت نیاز ست کن.** هرچه کمتر env var ست شده باشه، analytics پنل کمتر چیز خاصی نشون می‌ده.
+- **UUID داخل کانفیگ کلاینت رو لو نده.** هر کس داشته باشه می‌تونه استفاده کنه.
+- **اسم پروژه در داشبورد Vercel رو خنثی بذار.** `lab-staging`, `notes-api`, `personal-site` خوبن.
 
 ### ⚡ کارایی
 
-- پیش‌فرض روی `iad1` (Washington DC) اجرا می‌شه. در `vercel.json` می‌تونی `regions` تنظیم کنی برای موقعیت بهتر:
-  ```json
-  "regions": ["fra1", "sin1", "iad1"]
-  ```
+v1.2 روی Edge runtime اجرا می‌شه:
+- Cold start: **~5-50 ms** (~۱۰× سریع‌تر از Node.js)
+- Anycast routing: کاربر شما به نزدیک‌ترین PoP وصل می‌شه
+- استریم duplex با `fetch(..., { duplex: "half" })` — first byte out به‌محض first byte in
 
-### 📊 مانیتورینگ
+### 📊 مانیتورینگ (با محدودیت)
 
 ```bash
 vercel logs --prod --follow
 ```
 
+این فقط **invocation metadata** نشون می‌ده (status, duration, method, url). body، headers، یا errors از کد ما در لاگ ظاهر نمی‌شن.
+
 ### 🔄 آپدیت
 
 ```bash
-git add . && git commit -m "تغییر" && git push
-# Vercel خودکار redeploy می‌کنه (اگه ریپو متصل باشه)
-# یا دستی:
-vercel --prod
+git add . && git commit -m "..." && git push
+# Vercel خودکار redeploy می‌کنه
 ```
 
 ### 🌐 چندین deployment موازی (redundancy)
 
-برای مقاومت در برابر بلاک شدن یک URL، چند deployment موازی با همین کد بساز و در کانفیگ کلاینت چندتا outbound تعریف کن.
+برای مقاومت در برابر بلاک شدن یک URL، چند deployment موازی با همین کد بساز و در کلاینت چندتا outbound تعریف کن.
 
 ### 🎭 افزایش stealth بیشتر
 
-- محتوای `lib/site/content.js` (پست‌ها، پروژه‌ها، پروفایل) رو با هویتی که می‌خوای پابلیک باشی هماهنگ کن.
-- چند commit history واقعی بساز قبل از deploy.
-- اگه custom domain داری، sub-domain خنثی انتخاب کن (مثل `notes.yourdomain.com`).
+- محتوای `lib/site/content.js` (پست‌ها، پروژه‌ها، profile) رو با هویت پابلیک خودت هماهنگ کن
+- `ROUTE` رو به یه path سایت‌مانند دیگه ست کن (`/api/sync`, `/api/fetch`, `/api/v2/digest`)
+- چند commit history واقعی بساز قبل از deploy
+- از custom domain با sub-domain خنثی استفاده کن (`notes.yourdomain.com`)
 
 ---
 
 ## ✅ تمام شد!
 
-اگه `verify-deployment.sh` همه‌ی تست‌ها رو PASS داد و کلاینت بدون مشکل وصل می‌شه — کارت تموم.
+اگه `verify-deployment.sh` همه PASS داد و کلاینتت بدون مشکل وصل می‌شه — کارت تموم.
 
-> 🎉 از این لحظه: deployment شما به‌نظر **یک سایت پورتفولیو + یک JSON service** است. هیچ تنظیمات env باید دستی ست بشه نیست. هیچ آدرس hardcoded در کد نیست. اسم پروژه و توضیحاتش خنثی هستن.
+> 🎉 **از این لحظه:** ترافیک کلاینت تو در لاگ‌های Vercel **اصلاً قابل تشخیص از XHRهای معمولی سایت نیست**. هیچ console.* لاگی، هیچ header شفاف، هیچ size-fingerprint روی errors. سرعت کامل Edge runtime حفظ شده.

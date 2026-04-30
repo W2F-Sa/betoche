@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # Black-box verifier for a deployed instance. Validates the decoy
 # site, JSON helpers, and the JSON service surface mounted at ROUTE
-# (default /abc2). Also confirms the streaming endpoint is reachable.
+# (default /api/feed). Also confirms the streaming endpoint is reachable.
 #
 # Usage: ./scripts/verify-deployment.sh https://your-app.vercel.app
-#        ./scripts/verify-deployment.sh https://your-app.vercel.app /abc2
+#        ./scripts/verify-deployment.sh https://your-app.vercel.app /api/feed
 
 set -uo pipefail
 
 if [ "$#" -lt 1 ]; then
   echo "Usage: $0 https://your-app.vercel.app [route]"
-  echo "       route defaults to /abc2"
+  echo "       route defaults to /api/feed"
   exit 1
 fi
 
 BASE="${1%/}"
-ROUTE="${2:-/abc2}"
+ROUTE="${2:-/api/feed}"
 
 PASS=0
 FAIL=0

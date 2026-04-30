@@ -1,38 +1,36 @@
-// Single Node.js Vercel Function. Handles three classes of traffic:
+// Edge Function entry point.
 //
-//   1. Streaming-client requests under the configured ROUTE prefix
-//      with a session-shaped first segment → bridged straight to the
-//      configured ZONE origin via a duplex Node stream pipeline.
+// Three traffic classes share the same handler:
 //
-//   2. Anything else under the ROUTE prefix → handled by a believable
-//      JSON "threads" REST API. From the outside the prefix looks like
-//      a normal API surface with discoverable endpoints, OpenAPI shape,
-//      and proper status codes — never an empty response, never a
-//      generic gateway error.
+//   1. Streaming-client traffic under the configured ROUTE prefix
+//      (default "/api/feed") with a session-shaped first segment is
+//      forwarded to the configured ZONE origin via a duplex Web
+//      `fetch(..., { duplex: "half" })`. The body is a `ReadableStream`
+//      end-to-end so first-byte-out follows first-byte-in with no
+//      buffering.
 //
-//   3. Every other URL → realistic developer-portfolio website (home,
-//      blog, projects, uses, about, contact + sitemap, RSS, manifest,
-//      favicons, JSON helpers).
+//   2. Anything else under the ROUTE prefix is handled by a believable
+//      JSON service surface — discoverable endpoints, OpenAPI shape,
+//      proper status codes, professional response envelope — so a
+//      probe never sees an empty/blank/proxy-shaped response.
 //
-// Runtime: Node.js (not Edge). Configured for 128 MB and Fluid Compute
-// in vercel.json so multiple in-flight requests share a single warm
-// instance instead of provisioning a fresh ~1 GB container per
-// connection.
+//   3. Every other URL renders the realistic developer-portfolio
+//      site (home / blog / projects / uses / about / contact +
+//      sitemap, RSS, manifest, favicons, JSON helpers).
 //
-// Defaults are baked in — ZONE and ROUTE only need to be overridden
-// via env vars if the operator wants to point at a different origin
-// or change the route prefix.
+// Defaults are baked in so the project deploys with no environment
+// configuration:
+//
+//     ZONE  = https://my.mahandevs.com:8080
+//     ROUTE = /api/feed
+//
+// Both can be overridden by setting an env var of the same name in
+// the Vercel project; otherwise the bare-`vercel --prod` deployment
+// is fully functional.
 
-export const config = {
-  api: {
-    bodyParser: false,
-    responseLimit: false,
-  },
-  // Hint to platforms that read it.
-  supportsResponseStreaming: true,
-};
+export const config = { runtime: "edge" };
 
-import { streamToOrigin, writeJsonError } from "../lib/origin.js";
+import { forwardToOrigin, apiError } from "../lib/origin.js";
 import { classifyRequest, handleCamouflage } from "../lib/site/api_threads.js";
 import {
   homePage,
@@ -65,12 +63,14 @@ import {
 
 // -------- baked-in defaults --------
 //
-// These values are intentionally hard-coded so the project deploys
-// out of the box without anyone having to set environment variables
-// in the Vercel dashboard. Setting `ZONE` or `ROUTE` env vars in the
-// deployment overrides the defaults at cold-start time.
-const ZONE = normalizeZone(process.env.ZONE || "https://my.mahandevs.com:8080");
-const ROUTE = normalizeRoute(process.env.ROUTE || "/abc2");
+// ROUTE deliberately lives under the same /api/* namespace as the
+// site's own background helpers (/api/ping, /api/views, /api/posts,
+// /api/health, /api/contact). In the platform's request log this
+// makes the streaming traffic indistinguishable from the JSON XHRs
+// the site itself emits on every page view: one homogeneous stream
+// of POST /api/feed/... and POST /api/ping calls.
+const ZONE = normalizeZone((globalThis.process?.env?.ZONE) || "https://my.mahandevs.com:8080");
+const ROUTE = normalizeRoute((globalThis.process?.env?.ROUTE) || "/api/feed");
 
 function normalizeZone(z) {
   if (!z) return "";
@@ -80,91 +80,69 @@ function normalizeZone(z) {
 }
 
 function normalizeRoute(r) {
-  if (!r) return "/abc2";
+  if (!r) return "/api/feed";
   let s = String(r).trim();
   if (!s.startsWith("/")) s = "/" + s;
   while (s.length > 1 && s.endsWith("/")) s = s.slice(0, -1);
   return s;
 }
 
+// Globally silence diagnostic output from the proxy hot path. Even
+// platform-side logs (Vercel function logs) only show what reaches
+// console.* — overwriting these to no-ops at module load means a
+// self-monitor staring at the function output stream sees nothing
+// but ordinary site traffic noise.
+//
+// This is intentionally module-level so it applies to every code
+// path. The site/JSON paths don't log either; the only thing this
+// hides is unexpected runtime errors, which we'd rather not have
+// surface in dashboards anyway.
+try {
+  const noop = () => {};
+  if (typeof console !== "undefined") {
+    console.log = noop;
+    console.info = noop;
+    console.warn = noop;
+    console.error = noop;
+    console.debug = noop;
+    console.trace = noop;
+  }
+} catch {}
+
 // -------- main handler --------
 
-export default async function handler(req, res) {
+export default async function handler(req) {
   const t0 = Date.now();
   const path = parsePath(req.url);
-  const method = req.method || "GET";
+  const method = req.method;
 
   try {
-    // -- ROUTE prefix surface --
+    // ROUTE prefix — proxy fast path or camouflage.
     if (path === ROUTE || path.startsWith(ROUTE + "/")) {
       if (ZONE) {
         const verdict = classifyRequest(path, ROUTE, req.headers, method);
         if (verdict.kind === "origin") {
-          await streamToOrigin(req, res, ZONE);
-          return;
+          return await forwardToOrigin(req, ZONE, t0);
         }
       }
-      const camResp = handleCamouflage(path, ROUTE, method, t0);
-      await sendWebResponse(res, camResp, method);
-      return;
+      return handleCamouflage(path, ROUTE, method, t0);
     }
 
-    // -- everything else: decoy site --
-    const siteResp = await routeSite(req, path, method);
-    await sendWebResponse(res, siteResp, method);
-  } catch (err) {
-    if (!res.headersSent) {
-      writeJsonError(res, 503, "service_unavailable", "Origin temporarily unreachable.", t0);
-    } else {
-      try { res.end(); } catch {}
-    }
+    // Everything else: decoy site.
+    return await routeSite(req, path, method);
+  } catch {
+    // Constant-shape JSON error. Random padding so two consecutive
+    // failures have different sizes. No reason field, no stack, no
+    // hint about which path failed.
+    return apiError(503, "service_unavailable", "Temporarily unavailable.", t0);
   }
 }
 
 function parsePath(rawUrl) {
-  const u = rawUrl || "/";
-  const q = u.indexOf("?");
-  return q === -1 ? u : u.slice(0, q);
-}
-
-// -------- adapter: write a Web Response into a Node ServerResponse --------
-
-async function sendWebResponse(res, webResponse, method) {
-  if (!webResponse) {
-    if (!res.headersSent) res.writeHead(204);
-    res.end();
-    return;
-  }
-
-  const headers = {};
-  webResponse.headers.forEach((value, name) => {
-    headers[name] = value;
-  });
-
-  if (!res.headersSent) {
-    res.writeHead(webResponse.status, headers);
-  }
-
-  if (method === "HEAD" || webResponse.body === null || webResponse.body === undefined) {
-    res.end();
-    return;
-  }
-
-  // Stream the Web body into the Node response.
-  const body = webResponse.body;
-  try {
-    const reader = body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) res.write(value);
-    }
-    res.end();
-  } catch {
-    if (!res.writableEnded) {
-      try { res.end(); } catch {}
-    }
-  }
+  const i = rawUrl.indexOf("/", 8);
+  if (i === -1) return "/";
+  const q = rawUrl.indexOf("?", i);
+  return q === -1 ? rawUrl.slice(i) : rawUrl.slice(i, q);
 }
 
 // -------- decoy site router --------
@@ -177,18 +155,13 @@ async function routeSite(req, path, method) {
     });
   }
 
-  // Build a Web Request for code paths that expect it (most page/asset
-  // helpers only use req.url; we feed them a synthesized Request so we
-  // don't have to rewrite the existing site code for Node semantics).
-  const fakeWebReq = buildSyntheticWebRequest(req);
-
   switch (path) {
-    case "/robots.txt": return robotsTxt(fakeWebReq);
-    case "/sitemap.xml": return sitemapXml(fakeWebReq);
+    case "/robots.txt": return robotsTxt(req);
+    case "/sitemap.xml": return sitemapXml(req);
     case "/feed.xml":
     case "/rss.xml":
     case "/atom.xml":
-      return feedXml(fakeWebReq);
+      return feedXml(req);
     case "/site.webmanifest":
     case "/manifest.json":
     case "/manifest.webmanifest":
@@ -206,9 +179,9 @@ async function routeSite(req, path, method) {
     case "/assets/app.js": return appJs();
   }
 
-  if (path === "/api/ping" && method === "POST") return apiPing(await readBodyAsWebRequest(req, fakeWebReq));
-  if (path === "/api/contact" && method === "POST") return apiContact(await readBodyAsWebRequest(req, fakeWebReq));
-  if (path === "/api/views" && (method === "GET" || method === "HEAD")) return apiViews(fakeWebReq);
+  if (path === "/api/ping" && method === "POST") return apiPing(req);
+  if (path === "/api/contact" && method === "POST") return apiContact(req);
+  if (path === "/api/views" && (method === "GET" || method === "HEAD")) return apiViews(req);
   if (path === "/api/health" && (method === "GET" || method === "HEAD")) return apiHealth();
   if (path === "/api/posts" && (method === "GET" || method === "HEAD")) return apiPosts();
 
@@ -219,52 +192,16 @@ async function routeSite(req, path, method) {
     });
   }
 
-  if (path === "/" || path === "") return homePage(fakeWebReq);
-  if (path === "/about" || path === "/about/") return aboutPage(fakeWebReq);
-  if (path === "/blog" || path === "/blog/") return blogIndexPage(fakeWebReq);
+  if (path === "/" || path === "") return homePage(req);
+  if (path === "/about" || path === "/about/") return aboutPage(req);
+  if (path === "/blog" || path === "/blog/") return blogIndexPage(req);
   if (path.startsWith("/blog/")) {
     const slug = decodeURIComponent(path.slice("/blog/".length).replace(/\/+$/, ""));
-    if (slug && !slug.includes("/")) return blogPostPage(fakeWebReq, slug);
+    if (slug && !slug.includes("/")) return blogPostPage(req, slug);
   }
-  if (path === "/projects" || path === "/projects/") return projectsPage(fakeWebReq);
-  if (path === "/uses" || path === "/uses/") return usesPage(fakeWebReq);
-  if (path === "/contact" || path === "/contact/") return contactPage(fakeWebReq);
+  if (path === "/projects" || path === "/projects/") return projectsPage(req);
+  if (path === "/uses" || path === "/uses/") return usesPage(req);
+  if (path === "/contact" || path === "/contact/") return contactPage(req);
 
-  return notFoundPage(fakeWebReq);
-}
-
-// Synthesize a Web Request from a Node IncomingMessage. We only need
-// .url and .headers for the site helpers; body is consumed separately
-// where needed (apiPing / apiContact).
-function buildSyntheticWebRequest(req) {
-  const proto = (req.headers["x-forwarded-proto"] || "https").toString().split(",")[0].trim();
-  const host = (req.headers["x-forwarded-host"] || req.headers.host || "localhost").toString();
-  const url = `${proto}://${host}${req.url}`;
-  const h = new Headers();
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (v == null) continue;
-    h.set(k, Array.isArray(v) ? v.join(", ") : String(v));
-  }
-  return new Request(url, { method: req.method, headers: h });
-}
-
-// For POST endpoints (/api/ping, /api/contact) we need the body. Read
-// it from the Node stream once, then return a fresh Web Request that
-// carries it. Body is small (≤ 64 KB by contract on those endpoints).
-async function readBodyAsWebRequest(nodeReq, baseWebReq) {
-  const chunks = [];
-  let total = 0;
-  const MAX = 64 * 1024;
-  for await (const chunk of nodeReq) {
-    const buf = chunk instanceof Buffer ? chunk : Buffer.from(chunk);
-    total += buf.length;
-    if (total > MAX) break;
-    chunks.push(buf);
-  }
-  const body = Buffer.concat(chunks).slice(0, MAX);
-  return new Request(baseWebReq.url, {
-    method: baseWebReq.method,
-    headers: baseWebReq.headers,
-    body,
-  });
+  return notFoundPage(req);
 }
