@@ -1,30 +1,27 @@
-# راهنمای نصب صفر تا صد (فارسی) — v1.3
+# راهنمای نصب صفر تا صد (فارسی) — v1.4
 
-این راهنما طوری نوشته شده که بتونی **بدون تنظیمات اضافی** پروژه رو روی Vercel دیپلوی کنی، تضمینی کار کنه، و در لاگ‌های Vercel **هیچ‌کس** نتونه بفهمه چه ترافیکی رد می‌شه — حتی خودت با دسترسی کامل.
+این راهنما طوری نوشته شده که بدون هیچ تنظیمات اضافی پروژه رو روی Vercel دیپلوی کنی، تضمینی کار کنه، و **هیچ‌کس** (نه یک تحلیل‌گر انسانی، نه یک ربات الگوشناس، نه خودت با دسترسی کامل) نتونه از روی لاگ Vercel یا تحلیل ترافیک بفهمه چه ترافیکی در حال عبوره.
 
-> 🎯 **هدف نهایی:** یه URL مثل `https://your-app.vercel.app` که:
-> - سایت پورتفولیو + Feed API به‌نظر کاملاً واقعی serve می‌کنه
-> - ترافیک streaming کلاینتت رو به‌صورت کاملاً مخفی به origin می‌رسونه
-> - در لاگ‌های Vercel، **هیچ tellی** نمی‌مونه — نه `Go-http-client` در User-Agent، نه `?x_padding=XXX` در Referer، نه path غیرعادی
-> - Path الگو `/api/feed/<UUID>/<int>` در لاگ یه pagination cursor عادی به‌نظر میاد، چون **یه پست بلاگ + endpoint OpenAPI روی همون سایت داریم که این URL shape رو توضیح می‌ده**
+> 🎯 **هدف نهایی v1.4:**
+> - معماری اقتصادی v1.1 برمی‌گرده — Node.js Runtime + 128MB + Fluid Compute (تا ۸ برابر ارزون‌تر)
+> - **ترافیک استریم در میان ترافیک واقعی کاربران سایت گم می‌شه** — هر بازدید واقعی صفحه ۳-۸ درخواست به همان `/api/feed/<UUID>/<page>` می‌فرسته که شکلش با ترافیک پراکسی **یکسان** است
+> - تحلیل URL غیرممکن — هر دو شکل ترافیک با یک pattern URL کار می‌کنن، فقط Accept header تفاوت می‌ذاره
+> - تحلیل آماری غیرممکن — حجم ترافیک واقعی + پراکسی با هم mix می‌شن
 
 ---
 
-## مهم‌ترین تغییرات v1.3 نسبت به v1.2
+## مهم‌ترین تغییرات v1.4 نسبت به v1.3
 
-| | v1.0 | v1.1 | v1.2 | **v1.3 (deep stealth)** |
-|---|---|---|---|---|
-| Runtime | Edge | Node 128MB | Edge | **Edge** ⚡ |
-| Cold start | ~5-50 ms | ~200-500 ms | ~5-50 ms | **~5-50 ms** |
-| `ROUTE` | `/abc2` | `/abc2` | `/api/feed` | **`/api/feed`** |
-| `console.*` | active | active | silenced | **silenced** |
-| Camouflage برای `<UUID>/<int>` | ❌ 404 | ❌ 404 | ❌ 400 | **✅ JSON paginated feed** |
-| Cover story برای endpoint | ندارد | ندارد | ندارد | **✅ پست بلاگ + پروژه `feed-api` + OpenAPI** |
-| `Referer` به origin می‌رسه | ✅ | ✅ | ✅ | **❌ stripped** |
-| `Origin` header به origin می‌رسه | ✅ | ✅ | ✅ | **❌ stripped** |
-| توصیه‌ی `User-Agent` کلاینت | ندارد | ندارد | ندارد | **✅ Chrome UA کامل** |
-| توصیه‌ی `xPaddingHeader` کلاینت | ندارد | ندارد | ندارد | **✅ X-Page-Token (پاک کردن `?x_padding=`)** |
-| Hot path optimization | partial | partial | partial | **✅ inlined prefix test (no allocation)** |
+| | v1.3 | **v1.4 (deep mix)** |
+|---|---|---|
+| Runtime | Edge | **Node.js Serverless** |
+| Memory هر instance | ~1 GB رزرو | **128 MB واقعی** |
+| Concurrency | 1 request/instance | **Fluid Compute (چند request همزمان)** |
+| تخمین هزینه (نسبت به Edge) | پایه | **~۸× ارزان‌تر** |
+| Cover traffic از کاربران واقعی | ندارد | **✅ ۳-۸ درخواست به ازای هر بازدید واقعی** |
+| Activity widget روی سایت | ندارد | **✅ صفحه اصلی + footer هر صفحه** |
+| طبقه‌بندی proxy/cover | فقط بر اساس method | **method + Accept header (هوشمند)** |
+| در لاگ Vercel، tell باقی‌مونده | path pattern (UUID/int) | **هیچ — همان pattern برای traffic واقعی هم استفاده می‌شه** |
 
 ---
 
@@ -34,11 +31,12 @@
 2. [ساخت ریپازیتوری جدید](#۲-ساخت-ریپازیتوری-جدید-روی-github)
 3. [دیپلوی به Vercel](#۳-دیپلوی-به-vercel)
 4. [تست اتصال](#۴-تست-اتصال)
-5. [پیکربندی کلاینت — یه تغییر کوچک](#۵-پیکربندی-کلاینت--یه-تغییر-کوچک)
+5. [پیکربندی کلاینت — تغییرات کم](#۵-پیکربندی-کلاینت--تغییرات-کم)
 6. [اتصال custom domain](#۶-اتصال-custom-domain-اختیاری)
-7. [مخفی‌کاری در لاگ‌های Vercel](#۷-مخفیکاری-در-لاگهای-vercel)
-8. [عیب‌یابی](#۸-عیبیابی)
-9. [نکات حرفه‌ای](#۹-نکات-حرفهای)
+7. [بهینه‌سازی هزینه (v1.4)](#۷-بهینهسازی-هزینه-v14)
+8. [مخفی‌کاری در لاگ‌های Vercel](#۸-مخفیکاری-در-لاگهای-vercel)
+9. [عیب‌یابی](#۹-عیبیابی)
+10. [نکات حرفه‌ای](#۱۰-نکات-حرفهای)
 
 ---
 
@@ -57,23 +55,15 @@
 
 ## ۲. ساخت ریپازیتوری جدید روی GitHub
 
-### روش الف — اسکریپت آماده
-
 ```bash
 chmod +x scripts/init-new-repo.sh
 ./scripts/init-new-repo.sh
 ```
 
-اسکریپت آدرس remote ریپوی خالی GitHub رو می‌پرسه و باقی کار رو انجام میده.
-
-### روش ب — دستی
-
-اول روی GitHub یه ریپوی **خالی و private** بساز (بدون README، بدون LICENSE، بدون .gitignore). بعد:
+یا دستی:
 
 ```bash
-git init
-git add .
-git commit -m "Initial commit"
+git init && git add . && git commit -m "Initial commit"
 git branch -M main
 git remote add origin https://github.com/USERNAME/REPO_NAME.git
 git push -u origin main
@@ -86,7 +76,7 @@ git push -u origin main
 ```bash
 npm install -g vercel
 vercel login
-vercel link        # اسم رندوم خنثی برای پروژه انتخاب کن (مثل lab-staging یا notes-api)
+vercel link        # اسم خنثی برای پروژه (مثل lab-staging یا notes-api)
 vercel --prod
 ```
 
@@ -96,7 +86,7 @@ vercel --prod
 ✅ Production: https://lab-staging-abc123.vercel.app
 ```
 
-**این URL آدرس deployment شماست.** هیچ env var ست نشده، چون نیازی نیست.
+تموم. **بدون env var.**
 
 ---
 
@@ -108,49 +98,33 @@ chmod +x scripts/verify-deployment.sh
 ./scripts/verify-deployment.sh "$YOUR_URL" /api/feed
 ```
 
-> ⚠️ پارامتر دوم `/api/feed` است (نه `/abc2`) — `ROUTE` پیش‌فرض جدید.
-
-اگه همه تست‌ها PASS شدن — تموم.
-
-### تست دستی (در صورت نیاز)
+اگر می‌خوای دستی چک کنی:
 
 ```bash
-curl -sI "$YOUR_URL/"                          # 200 HTML سایت
-curl -s  "$YOUR_URL/api/feed"                  # JSON service root
-curl -s  "$YOUR_URL/api/feed/health"           # JSON health
-curl -sI "$YOUR_URL/api/feed" | grep -iE 'x-request-id|server-timing|x-api-version'
+# سایت
+curl -sI "$YOUR_URL/" | head -3
+
+# JSON service surface
+curl -s  "$YOUR_URL/api/feed"
+curl -s  "$YOUR_URL/api/feed/health"
+curl -s  "$YOUR_URL/api/feed/schema" | head -c 200
+
+# Cover traffic (همان URL pattern که proxy استفاده می‌کنه — اما به شکل JSON پاسخ می‌ده)
+curl -sH 'accept: application/json' \
+  "$YOUR_URL/api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/0" | head -c 300
 ```
 
 ---
 
-## ۵. پیکربندی کلاینت — یه تغییر کوچک
+## ۵. پیکربندی کلاینت — تغییرات کم
 
-> 🎯 **این تنها مرحله‌ای است که نیاز به تغییر کانفیگ کلاینت داری.**
-> دو تا تغییر کوچک:
-> 1. `host` رو به URL deployment جدید تغییر بده
-> 2. `path` رو از `/abc2` به `/api/feed` تغییر بده
+> 🎯 فقط دو تغییر در کانفیگ کلاینت (مثل قبل):
+> 1. `host` → URL Vercel جدید
+> 2. `path` → `/api/feed`
 
-دلیل تغییر path: در v1.2 ترافیک کلاینت روی همان namespace `/api/*` که XHRهای سایت اون‌جا کار می‌کنن فوروارد می‌شه. در لاگ‌های Vercel، درخواست‌های شما **اصلاً قابل تشخیص از XHRهای معمولی سایت نیستن** (که مثل `/api/ping`، `/api/views`، `/api/contact` هستن).
+برای **حداکثر** stealth (حذف tellهای `User-Agent: Go-http-client/2.0` و `Referer: ...?x_padding=`)، توصیه می‌شه به کانفیگ JSON کامل پایین مهاجرت کنی.
 
-### اگه share-link داری
-
-share-link **به‌تنهایی برای v1.3 کافی نیست** — بعضی از کلیدهای ضد-tell (مثل `User-Agent` و `xPaddingHeader`) فقط در کانفیگ JSON قابل تنظیمن. به‌شدت توصیه می‌شه به فرمت JSON پایین مهاجرت کنی.
-
-اگه فقط می‌خوای host و path رو سریع تست کنی:
-
-```
-...&host=YOUR_URL_VERCEL&path=%2Fapi%2Ffeed&extra=%7B%22xPaddingBytes%22%3A%22100-1000%22%2C%22xPaddingHeader%22%3A%22X-Page-Token%22%7D&...
-```
-
-ولی برای stealth واقعی، از کانفیگ JSON کامل پایین استفاده کن.
-
-### اگه از کانفیگ JSON استفاده می‌کنی — **نسخه کامل v1.3 (با حذف tellهای کلاینت)**
-
-این کانفیگ outbound کامل است که:
-
-1. ترافیک رو روی `/api/feed` می‌فرسته
-2. UA رو از `Go-http-client/2.0` به یه UA واقعی Chrome تغییر می‌ده (تا در لاگ‌های Vercel به‌جای "Go-http-client" یه UA معمولی ظاهر بشه)
-3. padding xhttp رو از URL query (`?x_padding=XXX...`) به یه header منتقل می‌کنه — این بزرگ‌ترین tell بود که در `Referer` در لاگ Vercel ظاهر می‌شد
+### کانفیگ کامل JSON (ضد-tell)
 
 ```json
 {
@@ -200,257 +174,231 @@ share-link **به‌تنهایی برای v1.3 کافی نیست** — بعضی 
 }
 ```
 
-> 🎯 **حیاتی‌ترین تغییرات نسبت به کانفیگ v1.2:**
-> - `headers.User-Agent` → یه UA معمولی Chrome (به جای `Go-http-client/2.0`)
-> - `headers.Accept` و `Accept-Language` → شبیه XHRهای واقعی مرورگر
-> - `extra.xPaddingHeader` → `"X-Page-Token"` (به‌جای خالی بودن، که xhttp رو مجبور می‌کنه padding رو در `?x_padding=...` URL بذاره و اون مقدار در `Referer` لاگ Vercel ظاهر می‌شه)
+> ⚠️ **مهم درباره‌ی Accept header کلاینت:** در v1.4 طبقه‌بندی هوشمند است — اگر Accept کلاینت شامل `*/*` باشه (مثل `application/json, text/plain, */*` بالا) به upstream فوروارد می‌شه. اگر فقط `application/json` بدون `*/*` باشه به‌عنوان browser fetch تشخیص داده می‌شه. کانفیگ بالا درست تنظیم شده.
 
-### مقایسه‌ی لاگ Vercel — قبل و بعد
+### در سرور Xray
 
-**قبل از v1.3 (هنوز tell داره):**
-```
-POST /api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/0 → 200
-User-Agent: Go-http-client/2.0
-Referer:    https://your-app.vercel.app/api/feed/.../0?x_padding=XXXXXXXXXXX...
-```
-
-**بعد از v1.3 (تمیز):**
-```
-POST /api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/0 → 200
-User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) ... Chrome/130.0.0.0 Safari/537.36
-Referer:    (none)
-```
-
-این از نظر ساختاری **با درخواست‌هایی که مرورگر واقعی به `/api/feed/<sessionId>/<page>` می‌فرسته (که حالا یه endpoint مستند با OpenAPI schema و یک پست بلاگ توضیح‌دهنده‌ست) قابل تشخیص نیست**.
-
-### و در سرور Xray
-
-`path` رو از `/abc2` (یا هرچی الان هست) به `/api/feed` تغییر بده، و `xPaddingHeader` رو هم در سرور برابر `X-Page-Token` بذار تا padding درست خوانده بشه:
+`path` و `xPaddingHeader` رو با کلاینت همگام کن:
 
 ```json
 {
   "inbounds": [{
     "port": 8080,
     "protocol": "vless",
-    "settings": { ... },
     "streamSettings": {
       "network": "xhttp",
       "xhttpSettings": {
         "path": "/api/feed",
-        "extra": {
-          "xPaddingHeader": "X-Page-Token"
-        }
-      },
-      ...
+        "extra": { "xPaddingHeader": "X-Page-Token" }
+      }
     }
   }]
 }
 ```
 
-> ⚠️ **مهم:** اگه `xPaddingHeader` در سرور و کلاینت match نباشه، اتصال شکسته می‌شه. هر دو رو روی `X-Page-Token` بذار، یا هر دو رو روی هر اسم header دلخواه دیگه (`X-Cursor`, `X-Token-V2`, …) — اسمش مهم نیست، فقط باید match باشه.
-
-> ✅ **یا** اگه نمی‌خوای کانفیگ سرور Xray رو هم تغییر بدی، در داشبورد Vercel یه env var `ROUTE` ست کن با مقدار همون path قدیمی سرورت (مثلاً `/abc2`). در این حالت log-stealth کم می‌شه ولی اتصال کار می‌کنه.
+> اگر نمی‌خوای path سرور Xray رو دست بزنی، `ROUTE` رو در داشبورد Vercel به همون path سرورت ست کن.
 
 ---
 
 ## ۶. اتصال Custom Domain (اختیاری)
 
-اگه می‌خوای `*.vercel.app` نباشه:
-
-1. Vercel Dashboard → پروژه → **Settings → Domains** → دامنه‌ی خودت رو اضافه کن (مثلاً `cdn.yourdomain.com`)
-2. در DNS provider خودت یه `CNAME` به `cname.vercel-dns.com` بذار
-3. منتظر بمون تا گواهی صادر بشه (~۱-۲ دقیقه)
-4. در کانفیگ کلاینت، `host=` رو به همون دامنه‌ی جدید تغییر بده
+1. Vercel Dashboard → پروژه → Settings → Domains → دامنه‌ی خودت
+2. در DNS provider، CNAME به `cname.vercel-dns.com`
+3. منتظر گواهی (~۱-۲ دقیقه)
+4. در کانفیگ کلاینت، `host=` و `serverName` رو به دامنه‌ی جدید تغییر بده
 
 ---
 
-## ۷. مخفی‌کاری در لاگ‌های Vercel
+## ۷. بهینه‌سازی هزینه (v1.4)
 
-این بخش جدید v1.2 هستش — برای اینکه **حتی خودت هم در داشبورد Vercel چیزی غیرعادی نبینی**:
+### مشکل: Provisioned Memory بالا روی Edge
 
-### الف) Path در لاگ شبیه XHRهای معمولی
+در نسخه‌های Edge، هر connection همزمان یک instance جدا با ~۱GB RAM رزرو‌شده ایجاد می‌کرد. حتی اگه مصرف واقعی هر instance فقط ~۳۵۰MB بود، کل ۱GB حساب می‌شد.
 
-سایت دکوی به‌صورت طبیعی این XHRها رو می‌فرسته:
+نمونه‌ی واقعی:
+- ۵ connection همزمان × ۱GB × ۱۲ ساعت/روز = ۶۰ GB-hrs/روز
+- ۳۰ روز = ۱,۸۰۰ GB-hrs → خیلی بیشتر از سهمیه ۳۶۰ GB-hrs!
 
+### راه‌حل v1.4: Node.js Runtime + 128MB Memory + Fluid Compute
+
+| | v1.0 / v1.2 / v1.3 (Edge) | **v1.1 / v1.4 (Node.js)** |
+|---|---|---|
+| Runtime | Edge (V8 isolate) | **Node.js Serverless** |
+| Memory هر instance | ~1 GB | **128 MB** |
+| Concurrency | 1 request/instance | **چند request/instance (Fluid Compute)** |
+| هزینه Memory تخمینی | ~$6.75/period | **~$0.50-0.85** |
+| کاهش | — | **~8x ارزان‌تر** |
+
+### تنظیمات اعمال‌شده
+
+**`vercel.json`:**
+
+```json
+{
+  "functions": {
+    "api/index.js": {
+      "memory": 128,
+      "maxDuration": 60
+    }
+  }
+}
 ```
-POST /api/ping            (heartbeat هر ۳۰-۴۵ ثانیه)
-GET  /api/views?path=/    (شمارنده بازدید)
-GET  /api/posts           (لیست پست‌ها)
-GET  /api/health          (probe سلامت)
-POST /api/contact         (ارسال فرم تماس)
-```
 
-ترافیک کلاینت شما به همون namespace می‌ره:
-
-```
-POST /api/feed/<session>/up    (uplink — مثل POST /api/ping)
-GET  /api/feed/<session>       (downlink — مثل GET /api/posts)
-```
-
-در لاگ کلیک‌کنی روی Functions → Invocations، تشخیص اینکه کدوم درخواست site-XHR و کدوم streaming-relay است **غیرممکن** (همه‌شون POST/GET به `/api/*` هستن، با hash های شبیه به هم).
-
-### ب) console.* کاملاً خاموش
-
-در `api/index.js` این بخش وجود داره:
+**`api/index.js`:**
 
 ```js
-try {
-  const noop = () => {};
-  console.log = noop;
-  console.info = noop;
-  console.warn = noop;
-  console.error = noop;
-  console.debug = noop;
-  console.trace = noop;
-} catch {}
+export const config = {
+  api: {
+    bodyParser: false,        // body بدون buffer stream می‌شه
+    responseLimit: false,     // محدودیت اندازه‌ی response برداشته می‌شه
+  },
+  supportsResponseStreaming: true,  // response هم stream می‌شه
+};
 ```
 
-این یعنی:
-- **هیچ خطایی** در tab "Logs" داشبورد Vercel ظاهر نمیشه
-- **هیچ هشدار/info پیامی** از کد ما لاگ نمیشه
-- اگه upstream قطع بشه و relay 503 برگردونه، در لاگ هیچ trace نیست — فقط همان مدل JSON envelope که هر API می‌فرسته
+`bodyParser: false` + `supportsResponseStreaming: true` + Fluid Compute → **چند request همزمان روی یک instance warm shared می‌شن**، نه instance جداگانه برای هر کدوم.
 
-### ج) Header bleach روی response
+---
 
-هر چیزی که می‌تونه origin رو لو بده، حذف می‌شه قبل از اینکه به client برسه:
+## ۸. مخفی‌کاری در لاگ‌های Vercel
 
-| header | کاری که می‌کنه | در v1.2 |
+این بخش بزرگ‌ترین تفاوت v1.4 است.
+
+### الف) Cover traffic واقعی از کاربران واقعی سایت
+
+سایت دکوی حالا یک **"Recent activity"** widget روی صفحه‌ی اصلی داره و یک **"Latest"** indicator در footer هر صفحه. هر دو از `/api/feed/<sessionId>/<page>` تغذیه می‌شن.
+
+**مهم:** session id یک UUID است که سمت کلاینت توسط `crypto.randomUUID()` تولید می‌شه و در `sessionStorage` ذخیره می‌شه — **دقیقاً همان شکل** UUIDای که xhttp استفاده می‌کنه.
+
+هر بازدید واقعی صفحه:
+- ۱ × `POST /api/feed/subscribe`
+- ۳ × `GET /api/feed/<UUID>/0` (page 0, 1, 2 برای widget)
+- ۱ × `GET /api/feed/<UUID>/0` (footer Latest)
+- ۱-۵ × `GET /api/feed/<UUID>/<n>` با اسکرول کردن (n = 3, 4, 5...)
+- و heartbeats دوره‌ای
+
+⇒ **۳-۸ درخواست به ازای هر بازدید واقعی** که در لاگ Vercel **بایت-به-بایت** با ترافیک streaming یکی هستن:
+
+```
+GET  /api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/0   ← بازدیدکننده واقعی
+GET  /api/feed/a1b2c3d4-e5f6-7890-abcd-ef0123456789/0   ← شما (xhttp downlink)
+POST /api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/0   ← شما (xhttp uplink)
+GET  /api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/1   ← بازدیدکننده واقعی (پیج بعدی)
+POST /api/feed/subscribe                                ← بازدیدکننده واقعی (subscribe)
+GET  /api/feed/9876fedc-ba98-7654-3210-fedcba987654/2   ← بازدیدکننده واقعی (اسکرول)
+```
+
+از روی URL pattern، method، یا حتی frequency تشخیص نمی‌دی کدوم real-user و کدوم proxy است.
+
+### ب) Method + Accept header مبنای classification
+
+تشخیص بین cover-traffic و proxy فقط از Accept header انجام می‌شه:
+
+| درخواست | Accept | کجا می‌ره |
 |---|---|---|
-| `Server: nginx/1.21` | runtime origin رو لو می‌ده | ❌ stripped |
-| `X-Powered-By: Express` | technology stack رو لو می‌ده | ❌ stripped |
-| `X-Vercel-Cache: MISS` | platform رو لو می‌ده | ❌ stripped |
-| `Set-Cookie: leaky=1` | session رو لو می‌ده | ❌ stripped |
-| `Via: 1.1 origin` | hop tracing رو لو می‌ده | ❌ stripped |
-| `Alt-Svc: h3=":443"` | پروتکل origin رو لو می‌ده | ❌ stripped |
-| `X-Cache: HIT` | layer رو لو می‌ده | ❌ stripped |
-| `X-AspNet-Version` | stack رو لو می‌ده | ❌ stripped |
+| `POST /api/feed/<UUID>/0` (uplink) | هرچی | upstream |
+| `GET /api/feed/<UUID>` (downlink) | شامل `*/*` | upstream |
+| `GET /api/feed/<UUID>/0` (browser fetch) | `application/json` بدون `*/*` | camouflage |
+| `GET /api/feed/<UUID>/0` (browser nav) | `text/html, …` | camouflage |
 
-تنها هدرهایی که از upstream پاس داده میشن:
-- `content-type` (لازم برای XHTTP framing)
-- `content-encoding`, `content-language`, `content-disposition`, `content-range`, `accept-ranges`, `last-modified`
+**نکته‌ی کلیدی:** browser `fetch()` کلاینت ما عمداً `Accept: application/json` خالی می‌فرسته (بدون `*/*`). xhttp همیشه `*/*` در Accept داره. این تفاوت یک کلید است که توی URL یا header های دیگه ظاهر نمی‌شه.
 
-همه‌چیز دیگه — **drop**.
+### ج) console.* کاملاً silenced
 
-### د) Header های envelope ثابت
-
-روی هر پاسخ (proxy، site، camouflage) همین envelope ست میشه:
-
-```
-cache-control: no-store, no-cache, must-revalidate, private
-content-type: application/octet-stream  (یا json/html بسته به route)
-pragma: no-cache
-referrer-policy: strict-origin-when-cross-origin
-server-timing: edge;dur=42
-vary: accept, accept-encoding, origin, x-requested-with
-x-api-version: v2.4
-x-content-type-options: nosniff
-x-request-id: <hash>
+```js
+console.log = console.info = console.warn = 
+console.error = console.debug = console.trace = () => {};
 ```
 
-این یعنی **هیچ پاسخی در network tab مرورگر یا curl تشخیص داده نمیشه** که proxy است یا site یا camouflage.
+هیچ output دیباگی از این کد به function logs Vercel نمی‌رسه.
+
+### د) Header bleach کامل روی response
+
+از upstream فقط این headerها به client می‌رسن (allow-list):
+- `content-type`, `content-encoding`, `content-language`
+- `content-disposition`, `content-range`, `accept-ranges`
+- `last-modified`
+
+همه بقیه strip می‌شن. بنابراین:
+- `Server: nginx` ← stripped
+- `X-Powered-By: Express` ← stripped
+- `Set-Cookie: …` ← stripped
+- `X-Vercel-Cache: HIT` ← stripped
+- `Alt-Svc: h3=":443"` ← stripped
+- ...
 
 ### ه) Outbound clean
 
-به origin، headers زیر هیچ‌وقت نمی‌رسن:
+به origin هیچ‌کدوم از این‌ها نمی‌رسه:
+- `host`, `x-vercel-*`, `x-real-ip`, `forwarded`
+- `x-forwarded-host/proto/port`
+- `cdn-loop`, `cf-*`, `true-client-ip`
+- `x-now-*`, `x-matched-path`
+- `referer`, `origin`
 
-```
-host (auto-set by fetch)
-x-vercel-* (همه‌ی اون‌ها)
-x-real-ip
-forwarded
-x-forwarded-host / x-forwarded-proto / x-forwarded-port
-cdn-loop, cf-*, true-client-ip
-x-now-id, x-now-trace, x-now-region, x-matched-path
-```
-
-origin می‌بینه: یه درخواست تمیز با فقط headerهای واقعی کلاینت، یعنی origin **نمی‌فهمه** که از Vercel اومده.
+origin **نمی‌فهمه** درخواست از Vercel اومده.
 
 ### و) Random padding روی errors
 
-دو خطای 503 پشت سر هم اندازه‌ی متفاوت دارن (با base64 padding تصادفی ۹۶-۱۰۲۴ بایت). این یعنی **هیچ‌کس نمی‌تونه از روی size envelope of response تشخیص بده که proxy down است** — هر بار size متفاوت.
+دو خطای 503 پشت سر هم اندازه‌ی متفاوت دارن (base64 padding تصادفی ۹۶-۱۰۲۴ بایت).
+
+### ز) Envelope ثابت روی همه‌ی response ها
+
+`x-request-id`, `x-api-version: v2.4`, `server-timing`, `cache-control`, `vary`, `referrer-policy`, `x-content-type-options`, `pragma` روی **هر** پاسخ ست می‌شن. شکل response تشخیص نمی‌ده کدوم proxy است کدوم site.
 
 ---
 
-## ۸. عیب‌یابی
+## ۹. عیب‌یابی
 
-### مشکل: کلاینت وصل نمی‌شه
+| علامت | راه‌حل |
+|---|---|
+| کلاینت وصل نمی‌شه | مطمئن شو `path=/api/feed` در کلاینت AND سرور Xray یکسان است |
+| کلاینت وصل می‌شه ولی traffic نمی‌ره | سرور Xrayت روی `https://my.mahandevs.com:8080` آنلاین است؟ |
+| `/api/feed` در browser HTML 404 می‌ده | env var `ROUTE` رو ست/پاک کن |
+| `vercel --prod` خطا می‌ده | `vercel logs --prod --since 5m` |
+| origin تغییر کرده | env var `ZONE` ست کن، redeploy |
 
-۱. مطمئن شو path در کانفیگ کلاینت `/api/feed` است (نه `/abc2`).
-۲. مطمئن شو path در کانفیگ سرور Xray هم `/api/feed` است (یا env var `ROUTE` رو در Vercel به `/abc2` ست کن).
-۳. مطمئن شو سرور Xrayت روی `https://my.mahandevs.com:8080` آنلاین است.
-
-### مشکل: نمی‌دونم در لاگ‌های Vercel کدوم درخواست‌ها مال streaming و کدوم مال سایت هستن
-
-**دقیقاً همینه که می‌خواستیم.** v1.2 باید این تشخیص رو غیرممکن کنه. ولی:
-
-- Vercel هیچ‌وقت body رو لاگ نمی‌کنه
-- console.* همه silenced هستن
-- URL ها همه شبیه `/api/feed/<hash>/...` هستن (و `/api/ping/...`، `/api/views`، …)
-
-### مشکل: ZONE واقعی شما تغییر کرده
-
-در داشبورد Vercel یه env var `ZONE` با مقدار جدید (مثلاً `https://newhost.example:8443`) اضافه کن، سپس:
-
-```bash
-vercel --prod
-```
-
-### مشکل: می‌خوام `path` در سرور Xray رو نگه دارم `/abc2`
-
-در داشبورد Vercel یه env var `ROUTE` با مقدار `/abc2` اضافه کن، redeploy کن. سپس در کلاینت هم `path=/abc2` بذار. این هم کار می‌کنه — ولی stealth کم می‌شه چون path در لاگ‌ها متفاوت از XHRهای سایت ظاهر میشه.
-
-### چک‌لیست سلامت کامل
-
-```bash
-./scripts/verify-deployment.sh "$YOUR_URL" /api/feed
-```
+تست خودکار: `./scripts/verify-deployment.sh "$YOUR_URL" /api/feed`
 
 ---
 
-## ۹. نکات حرفه‌ای
+## ۱۰. نکات حرفه‌ای
 
 ### 🔒 امنیت
 
-- **UUID داخل کانفیگ کلاینت رو لو نده.** هر کس داشته باشه می‌تونه استفاده کنه.
-- **اسم پروژه در داشبورد Vercel رو خنثی بذار.** `lab-staging`, `notes-api`, `personal-site` خوبن.
+- **UUID کانفیگ کلاینت رو لو نده.**
+- **اسم پروژه Vercel رو خنثی بذار** (`lab-staging`, `notes-api`, `personal-site`).
 
 ### ⚡ کارایی
 
-v1.2 روی Edge runtime اجرا می‌شه:
-- Cold start: **~5-50 ms** (~۱۰× سریع‌تر از Node.js)
-- Anycast routing: کاربر شما به نزدیک‌ترین PoP وصل می‌شه
-- استریم duplex با `fetch(..., { duplex: "half" })` — first byte out به‌محض first byte in
+- Node.js cold start ~۲۰۰ms (اولین درخواست بعد از idle طولانی) — این **یک‌بار در هر چند دقیقه** اتفاق می‌افته. درخواست‌های بعدی روی همون warm instance با Fluid Compute چندتا concurrent درخواست هندل می‌کنن.
+- اگر می‌خوای cold start رو حذف کنی، Vercel Pro دارای "Always-warm" است.
+- برای انتخاب نزدیک‌ترین region، در `vercel.json` اضافه کن:
+  ```json
+  "regions": ["fra1", "sin1", "iad1"]
+  ```
 
-### 📊 مانیتورینگ (با محدودیت)
+### 📊 مانیتورینگ
 
 ```bash
 vercel logs --prod --follow
 ```
 
-این فقط **invocation metadata** نشون می‌ده (status, duration, method, url). body، headers، یا errors از کد ما در لاگ ظاهر نمی‌شن.
+### 🌐 چندین deployment موازی
 
-### 🔄 آپدیت
-
-```bash
-git add . && git commit -m "..." && git push
-# Vercel خودکار redeploy می‌کنه
-```
-
-### 🌐 چندین deployment موازی (redundancy)
-
-برای مقاومت در برابر بلاک شدن یک URL، چند deployment موازی با همین کد بساز و در کلاینت چندتا outbound تعریف کن.
+برای redundancy: چندین deploy بساز با همان کد، در client چندتا outbound تعریف کن.
 
 ### 🎭 افزایش stealth بیشتر
 
-- محتوای `lib/site/content.js` (پست‌ها، پروژه‌ها، profile) رو با هویت پابلیک خودت هماهنگ کن
-- `ROUTE` رو به یه path سایت‌مانند دیگه ست کن (`/api/sync`, `/api/fetch`, `/api/v2/digest`)
-- چند commit history واقعی بساز قبل از deploy
-- از custom domain با sub-domain خنثی استفاده کن (`notes.yourdomain.com`)
+- محتوای `lib/site/content.js` رو با هویت پابلیک واقعی هماهنگ کن.
+- از custom domain استفاده کن.
+- چند commit history واقعی بساز قبل از deploy.
+- اگر دامنه‌ت پر-traffic بشه (مثلاً share کردی توی فروم‌های توسعه‌دهنده)، حجم cover-traffic بزرگ‌تر می‌شه و ترافیک proxy تو غرق می‌شه.
 
 ---
 
 ## ✅ تمام شد!
 
-اگه `verify-deployment.sh` همه PASS داد و کلاینتت بدون مشکل وصل می‌شه — کارت تموم.
+اگر `verify-deployment.sh` همه PASS داد و کلاینت بدون مشکل وصل می‌شه — کارت تموم.
 
-> 🎉 **از این لحظه:** ترافیک کلاینت تو در لاگ‌های Vercel **اصلاً قابل تشخیص از XHRهای معمولی سایت نیست**. هیچ console.* لاگی، هیچ header شفاف، هیچ size-fingerprint روی errors. سرعت کامل Edge runtime حفظ شده.
+> 🎉 **از این لحظه:** هر بازدید واقعی صفحه ۳-۸ درخواست به همان `/api/feed/<UUID>/<n>` می‌فرسته که proxy استفاده می‌کنه. ترافیک شما در بستر ترافیک واقعی کاربران سایت گم می‌شه. حتی با دسترسی کامل به داشبورد Vercel و log اتفاقی نداری.
