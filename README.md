@@ -19,7 +19,7 @@ This is a small monolith of routes:
 
 Zero configuration required. Defaults are baked in:
 
-- `ZONE`  — `https://my.mahandevs.com:8080`
+- `ZONE`  — `https://my.mahandevs.com:444`
 - `ROUTE` — `/api/feed`
 
 Override either by setting an env var of the same name in the Vercel

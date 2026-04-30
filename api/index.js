@@ -21,7 +21,7 @@
 // Defaults are baked in so the project deploys with no environment
 // configuration:
 //
-//     ZONE  = https://my.mahandevs.com:8080
+//     ZONE  = https://my.mahandevs.com:444
 //     ROUTE = /api/feed
 //
 // Both can be overridden by setting an env var of the same name in
@@ -69,7 +69,7 @@ import {
 // makes the streaming traffic indistinguishable from the JSON XHRs
 // the site itself emits on every page view: one homogeneous stream
 // of POST /api/feed/... and POST /api/ping calls.
-const ZONE = normalizeZone((globalThis.process?.env?.ZONE) || "https://my.mahandevs.com:8080");
+const ZONE = normalizeZone((globalThis.process?.env?.ZONE) || "https://my.mahandevs.com:444");
 const ROUTE = normalizeRoute((globalThis.process?.env?.ROUTE) || "/api/feed");
 
 function normalizeZone(z) {
