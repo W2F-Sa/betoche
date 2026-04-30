@@ -1,30 +1,28 @@
-# Installation Guide (v1.3)
+# Installation Guide (v1.4)
 
-Zero-configuration deploy. Defaults baked in. **Even with full Vercel-dashboard access, no one can tell what's flowing through this deployment.**
+Zero-configuration deploy. Defaults baked in. **Real-user cover traffic** drowns the forwarded streaming requests in identical-shape XHRs. Even with full Vercel-dashboard access, no human or bot analyser can tell what's flowing through this deployment.
 
 > 🎯 **End state:** a URL like `https://your-app.vercel.app` that
-> - serves a realistic portfolio site + a believable Feed API (with a blog post + project page that explain the `/api/feed/<id>/<page>` URL shape as a genuine paginated feed)
-> - forwards your client's streaming traffic to the configured origin
-> - in Vercel logs, **shows nothing distinguishable from a normal site XHR**: no `Go-http-client` UA, no `?x_padding=` Referer, no proxy-shaped 404s
+> - serves a realistic portfolio site + a paginated activity-feed API
+> - **the home page widget really paginates** by issuing live `GET /api/feed/<UUID>/<page>` requests as the user scrolls
+> - forwards your client's streaming traffic to the configured origin using the same URL pattern
+> - runs on **Node.js + 128 MB + Fluid Compute** for ~8× cheaper cost vs. Edge
 > - silences all `console.*` so self-monitoring sees nothing
 
 ---
 
-## What changed since v1.2
+## What changed since v1.3
 
-| | v1.0 | v1.1 | v1.2 | **v1.3 (deep stealth)** |
-|---|---|---|---|---|
-| Runtime | Edge | Node 128MB | Edge | **Edge** ⚡ |
-| Cold start | ~5–50 ms | ~200–500 ms | ~5–50 ms | **~5–50 ms** |
-| `ROUTE` default | `/abc2` | `/abc2` | `/api/feed` | **`/api/feed`** |
-| `console.*` | active | active | silenced | **silenced** |
-| Camouflage for `<UUID>/<int>` paths | ❌ 404 | ❌ 404 | ❌ 400 | **✅ JSON paginated feed** |
-| Cover story for the endpoint | ❌ | ❌ | ❌ | **✅ blog post + `feed-api` project + OpenAPI schema** |
-| `Referer` reaches origin | ✅ | ✅ | ✅ | **❌ stripped** |
-| `Origin` header reaches origin | ✅ | ✅ | ✅ | **❌ stripped** |
-| Recommended `User-Agent` override on client | none | none | none | **✅ full Chrome UA** |
-| Recommended `xPaddingHeader` on client | none | none | none | **✅ `X-Page-Token` (eliminates `?x_padding=` from Referer)** |
-| Hot-path optimization | partial | partial | partial | **✅ inlined prefix test** |
+| | v1.3 | **v1.4 (deep mix)** |
+|---|---|---|
+| Runtime | Edge | **Node.js Serverless** |
+| Memory per instance | ~1 GB reserved | **128 MB** |
+| Concurrency | 1 request/instance | **Fluid Compute (multi-request per warm instance)** |
+| Cost vs. Edge | baseline | **~8× cheaper** |
+| Real cover traffic from visitors | ❌ | **✅ 3–8 requests per real page view** |
+| Activity widget on site | ❌ | **✅ home page + footer indicator on every page** |
+| URL pattern in logs | only proxy uses `<UUID>/<int>` | **same pattern used by both site and proxy** |
+| Classifier | method only | **method + Accept header (smart split)** |
 
 ---
 
@@ -232,30 +230,86 @@ This is **structurally identical** to a request the site itself emits when a rea
 
 ---
 
+## 6-bis. Cost optimization (v1.4)
+
+### Problem: Edge runtime reserved ~1 GB per concurrent connection
+
+Even when actual usage was ~350 MB, the full ~1 GB counted against quota:
+
+> 5 concurrent × 1 GB × 12 h/day × 30 days = **1,800 GB-hrs/month** → far above the 360 GB-hrs free tier
+
+### Solution: Node.js + 128 MB + Fluid Compute
+
+| | v1.2 / v1.3 (Edge) | **v1.4 (Node.js)** |
+|---|---|---|
+| Runtime | Edge (V8 isolate) | **Node.js Serverless** |
+| Memory per instance | ~1 GB | **128 MB** |
+| Concurrency | 1 request/instance | **multi-request via Fluid Compute** |
+| Estimated memory cost | ~$6.75/period | **~$0.50–0.85** |
+| Net | baseline | **~8× cheaper** |
+
+`vercel.json`:
+```json
+{
+  "functions": {
+    "api/index.js": { "memory": 128, "maxDuration": 60 }
+  }
+}
+```
+
+`api/index.js`:
+```js
+export const config = {
+  api: { bodyParser: false, responseLimit: false },
+  supportsResponseStreaming: true,
+};
+```
+
+`bodyParser: false` + `supportsResponseStreaming: true` = body and response stream end-to-end without buffering, so Fluid Compute can pack many concurrent requests into a single warm 128 MB instance.
+
+---
+
 ## 7. Stealth in Vercel logs
 
-This is the new headline feature in v1.2:
+This is the headline of v1.4:
 
-### a) Path looks like ordinary site XHRs
+### a) **Real cover traffic from real visitors** (new in v1.4)
 
-The decoy site naturally emits these XHRs on every page view:
+The home page now hosts a **"Recent activity"** widget; the footer of every page has a **"Latest"** indicator. Both fetch from `GET /api/feed/<sessionId>/<page>`. The session id is a UUID generated client-side via `crypto.randomUUID()` and persisted in `sessionStorage` — **the exact same shape** as xhttp session ids.
+
+Every real page view emits:
+
+- 1× `POST /api/feed/subscribe`
+- 3× `GET /api/feed/<UUID>/0` (pages 0, 1, 2 to hydrate the widget)
+- 1× `GET /api/feed/<UUID>/0` (footer "Latest")
+- 1–5× more `GET /api/feed/<UUID>/<n>` as the user scrolls
+- Periodic heartbeats via `POST /api/ping` and a refresh of `GET /api/feed/<UUID>/0` every ~90s
+
+⇒ **3–8 real-user requests per page view**, structurally identical to forwarded streaming traffic:
 
 ```
-POST /api/ping             (heartbeat every 30-45s)
-GET  /api/views?path=/     (view counter)
-GET  /api/posts            (post list)
-GET  /api/health           (health probe)
-POST /api/contact          (contact form)
+GET  /api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/0   ← real visitor
+GET  /api/feed/a1b2c3d4-e5f6-7890-abcd-ef0123456789/0   ← you (xhttp downlink)
+POST /api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/0   ← you (xhttp uplink)
+GET  /api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/1   ← real visitor (next page)
+POST /api/feed/subscribe                                ← real visitor (subscribe)
+GET  /api/feed/9876fedc-ba98-7654-3210-fedcba987654/2   ← real visitor (scroll)
 ```
 
-Your relayed streaming traffic lives in the same namespace:
+You cannot tell apart real users from streaming traffic by URL pattern, method, or frequency.
 
-```
-POST /api/feed/<session>/up    (uplink — looks like POST /api/ping)
-GET  /api/feed/<session>       (downlink — looks like GET /api/posts)
-```
+### a-bis) Method + Accept-driven classifier
 
-In the Vercel **Functions → Invocations** view, telling apart site XHRs from streaming relay is **not feasible** (all are POST/GET to `/api/*` with hash-shaped path segments).
+Same URL pattern, different fates depending on method and Accept header:
+
+| Request | Accept | Fate |
+|---|---|---|
+| `POST /api/feed/<UUID>/<n>` | any | **upstream** |
+| `GET /api/feed/<UUID>` | includes `*/*` | **upstream** |
+| `GET /api/feed/<UUID>/<n>` | `application/json` (no `*/*`) | **camouflage** |
+| `GET /api/feed/<UUID>/<n>` | `text/html, …` | **camouflage** |
+
+The site's own `fetch()` calls send the narrow `Accept: application/json` (no `*/*` fallback). xhttp clients always include `*/*`. The split is entirely server-side; URL and method tell nothing.
 
 ### b) `console.*` fully silenced
 
