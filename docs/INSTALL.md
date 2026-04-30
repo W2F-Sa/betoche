@@ -1,25 +1,30 @@
-# Installation Guide (v1.2)
+# Installation Guide (v1.3)
 
-Zero-configuration deployment to Vercel — no environment variables required, no manual configuration. Defaults are baked into the code.
+Zero-configuration deploy. Defaults baked in. **Even with full Vercel-dashboard access, no one can tell what's flowing through this deployment.**
 
 > 🎯 **End state:** a URL like `https://your-app.vercel.app` that
-> - serves a portfolio site + JSON service surface
-> - relays your client's streaming traffic to the configured origin
-> - logs streaming requests indistinguishably from the site's own background XHRs
-> - leaves nothing in self-monitoring dashboards (`console.*` is silenced module-wide)
+> - serves a realistic portfolio site + a believable Feed API (with a blog post + project page that explain the `/api/feed/<id>/<page>` URL shape as a genuine paginated feed)
+> - forwards your client's streaming traffic to the configured origin
+> - in Vercel logs, **shows nothing distinguishable from a normal site XHR**: no `Go-http-client` UA, no `?x_padding=` Referer, no proxy-shaped 404s
+> - silences all `console.*` so self-monitoring sees nothing
 
 ---
 
-## Key changes since v1.1
+## What changed since v1.2
 
-| | v1.0 (Edge) | v1.1 (Node 128 MB) | **v1.2 (Edge + stealth)** |
-|---|---|---|---|
-| Runtime | Edge | Node.js | **Edge (V8 isolate)** ⚡ |
-| Cold start | ~5–50 ms | ~200–500 ms | **~5–50 ms** |
-| `ROUTE` default | `/abc2` | `/abc2` | **`/api/feed`** |
-| `console.*` | active | active | **all silenced** |
-| Response header bleach | partial | partial | **complete (`server`, `x-powered-by`, `x-vercel-cache`, `set-cookie`, `via`, `alt-svc`, `x-cache`, `x-aspnet-version`, …)** |
-| Upstream headers leaked | many | many | **none beyond `content-type` family** |
+| | v1.0 | v1.1 | v1.2 | **v1.3 (deep stealth)** |
+|---|---|---|---|---|
+| Runtime | Edge | Node 128MB | Edge | **Edge** ⚡ |
+| Cold start | ~5–50 ms | ~200–500 ms | ~5–50 ms | **~5–50 ms** |
+| `ROUTE` default | `/abc2` | `/abc2` | `/api/feed` | **`/api/feed`** |
+| `console.*` | active | active | silenced | **silenced** |
+| Camouflage for `<UUID>/<int>` paths | ❌ 404 | ❌ 404 | ❌ 400 | **✅ JSON paginated feed** |
+| Cover story for the endpoint | ❌ | ❌ | ❌ | **✅ blog post + `feed-api` project + OpenAPI schema** |
+| `Referer` reaches origin | ✅ | ✅ | ✅ | **❌ stripped** |
+| `Origin` header reaches origin | ✅ | ✅ | ✅ | **❌ stripped** |
+| Recommended `User-Agent` override on client | none | none | none | **✅ full Chrome UA** |
+| Recommended `xPaddingHeader` on client | none | none | none | **✅ `X-Page-Token` (eliminates `?x_padding=` from Referer)** |
+| Hot-path optimization | partial | partial | partial | **✅ inlined prefix test** |
 
 ---
 
@@ -46,7 +51,7 @@ Zero-configuration deployment to Vercel — no environment variables required, n
 | Vercel account | hosting | [vercel.com/signup](https://vercel.com/signup) |
 | GitHub account | repo hosting | [github.com](https://github.com/) |
 
-> ✅ **No env vars required.** Defaults: `ZONE=https://my.mahandevs.com:444`, `ROUTE=/api/feed`. Override in Vercel dashboard only if needed.
+> ✅ **No env vars required.** Defaults: `ZONE=https://my.mahandevs.com:8080`, `ROUTE=/api/feed`. Override in Vercel dashboard only if needed.
 
 ---
 
@@ -110,45 +115,111 @@ curl -sI "$YOUR_URL/api/feed" | grep -iE 'x-request-id|server-timing|x-api-versi
 
 ---
 
-## 5. Client config — one small change
+## 5. Client config — required for v1.3 deep stealth
 
-> 🎯 **Two tiny edits to the client config:**
+> 🎯 **Three edits to the client config:**
 > 1. `host` → new Vercel URL
-> 2. `path` → `/api/feed` (was `/abc2`)
+> 2. `path` → `/api/feed`
+> 3. **Add `headers.User-Agent` and `extra.xPaddingHeader`** — these eliminate the two biggest tells in Vercel logs (`Go-http-client/2.0` UA, `?x_padding=...` Referer)
 
-The path change is what makes the streaming traffic *invisible in Vercel logs*. By living in the same `/api/*` namespace as the site's own background XHRs (`/api/ping`, `/api/views`, `/api/posts`, `/api/contact`, `/api/health`), the relayed traffic and the site's own JSON calls become indistinguishable in the Functions Invocations view.
+### Why this matters
 
-### Share-link
+Vercel logs the inbound request URL and headers **before** your function runs. Server-side stealth can't rewrite what the platform recorded. The only way to clean up the log entries is to make the client **not emit those tells in the first place**.
 
-Old:
-```
-...&host=OLD_URL&path=%2Fabc2&...
-```
-
-New:
-```
-...&host=YOUR_URL&path=%2Fapi%2Ffeed&...
-```
-
-### JSON config
+### Full v1.3 outbound (recommended)
 
 ```json
 {
   "outbounds": [{
+    "tag": "feed-out",
+    "protocol": "vless",
+    "settings": {
+      "vnext": [{
+        "address": "lab-staging-abc123.vercel.app",
+        "port": 443,
+        "users": [{
+          "id": "0a285ffd-f3c0-47fe-bfbd-b01711c8c5a3",
+          "encryption": "none",
+          "flow": ""
+        }]
+      }]
+    },
     "streamSettings": {
+      "network": "xhttp",
+      "security": "tls",
+      "tlsSettings": {
+        "serverName": "lab-staging-abc123.vercel.app",
+        "alpn": ["h2", "http/1.1"],
+        "fingerprint": "chrome",
+        "allowInsecure": false
+      },
       "xhttpSettings": {
         "host": "lab-staging-abc123.vercel.app",
         "path": "/api/feed",
-        "mode": "auto"
+        "mode": "auto",
+        "headers": {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+          "Accept": "application/json, text/plain, */*",
+          "Accept-Language": "en-US,en;q=0.9"
+        },
+        "extra": {
+          "xPaddingBytes": "100-1000",
+          "xPaddingHeader": "X-Page-Token",
+          "noSSEHeader": false,
+          "scMaxEachPostBytes": "1000000",
+          "scMaxBufferedPosts": 30,
+          "scStreamUpServerSecs": "20-80"
+        }
       }
     }
   }]
 }
 ```
 
-> 💡 **Your origin Xray's `path`** must also be `/api/feed` (so the path matches end-to-end). Either:
-> - **Edit your origin config**: `inbounds[].streamSettings.xhttpSettings.path = "/api/feed"`
-> - **Or set Vercel env `ROUTE=/abc2`** to keep the origin path as-is. (This works but loses log-stealth — paths in logs will look distinct from `/api/*` site calls.)
+### Vercel log entry comparison
+
+**v1.2 (still leaks):**
+```
+POST /api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/0 → 200
+User-Agent: Go-http-client/2.0
+Referer:    https://your-app.vercel.app/api/feed/.../0?x_padding=XXXXXXXXXXX...
+```
+
+**v1.3 (clean):**
+```
+POST /api/feed/7c80d30e-c616-436a-884d-a45e6dba995a/0 → 200
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) ... Chrome/130.0.0.0 Safari/537.36
+Referer:    (none)
+```
+
+This is **structurally identical** to a request the site itself emits when a real browser hits `/api/feed/<sessionId>/<page>` (which is now a documented endpoint with an OpenAPI schema and a blog post explaining it).
+
+### Origin-side change
+
+`path` in your Xray server config must also be `/api/feed`, and `xPaddingHeader` must match (`X-Page-Token`):
+
+```json
+{
+  "inbounds": [{
+    "port": 8080,
+    "protocol": "vless",
+    "streamSettings": {
+      "network": "xhttp",
+      "xhttpSettings": {
+        "path": "/api/feed",
+        "extra": {
+          "xPaddingHeader": "X-Page-Token"
+        }
+      }
+    }
+  }]
+}
+```
+
+> ⚠️ `xPaddingHeader` must match between client and server. Pick any header name (`X-Page-Token`, `X-Cursor`, `X-Token-V2`) — what matters is that both sides agree.
+
+> 💡 **Or** keep your origin's `path` and `xPaddingHeader` settings unchanged and set Vercel envs `ROUTE` (and don't change `xPaddingHeader`) accordingly. Both work; the v1.3 recommended config maximizes log-stealth.
+
 
 ---
 
