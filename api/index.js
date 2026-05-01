@@ -119,6 +119,17 @@ export default async function handler(req, res) {
   const path = qIdx === -1 ? rawUrl : rawUrl.slice(0, qIdx);
 
   try {
+    // ---- protected diag endpoint ----
+    // Only responds when called with ?token=<DIAG_TOKEN env>. Returns
+    // the live ZONE/ROUTE the running container actually loaded plus a
+    // boolean for whether it can open a TCP-level handshake to the
+    // origin. There is no path here that leaks the values without the
+    // token, so it stays safe even on a public deployment.
+    if (path === "/__diag") {
+      await handleDiag(req, res);
+      return;
+    }
+
     // ---- ROUTE prefix surface ----
     if (path.length >= ROUTE_LEN &&
         (path.length === ROUTE_LEN
@@ -147,6 +158,64 @@ export default async function handler(req, res) {
       try { res.end(); } catch {}
     }
   }
+}
+
+// -------- diagnostics --------
+
+async function handleDiag(req, res) {
+  const expected = process.env.DIAG_TOKEN;
+  const url = new URL(req.url, "http://x");
+  const token = url.searchParams.get("token");
+  if (!expected || token !== expected) {
+    res.writeHead(404, { "content-type": "text/plain" });
+    res.end("Not Found");
+    return;
+  }
+
+  let parsed = null;
+  try {
+    const u = new URL(ZONE);
+    parsed = {
+      protocol: u.protocol,
+      hostname: u.hostname,
+      port: u.port || (u.protocol === "https:" ? "443" : "80"),
+      portExplicitlySet: u.port !== "",
+      pathname: u.pathname,
+    };
+  } catch (e) {
+    parsed = { error: String(e) };
+  }
+
+  const probeTarget = ZONE + ROUTE + "/diag-" + Date.now() + "/0";
+  let probe = null;
+  const probeT0 = Date.now();
+  try {
+    const r = await fetch(probeTarget, {
+      method: "POST",
+      body: "x",
+      redirect: "manual",
+    });
+    probe = { ok: true, status: r.status, ms: Date.now() - probeT0 };
+  } catch (e) {
+    probe = { ok: false, error: String(e?.message || e), ms: Date.now() - probeT0 };
+  }
+
+  const body = JSON.stringify({
+    zone_raw_env: process.env.ZONE || null,
+    zone_normalized: ZONE,
+    zone_parsed: parsed,
+    route: ROUTE,
+    probe_target: probeTarget,
+    probe_result: probe,
+    region: process.env.VERCEL_REGION || null,
+    deploy_id: process.env.VERCEL_DEPLOYMENT_ID || null,
+    git_commit: process.env.VERCEL_GIT_COMMIT_SHA || null,
+  }, null, 2);
+  res.writeHead(200, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  });
+  res.end(body);
 }
 
 // -------- adapter: Web Response → Node ServerResponse --------
