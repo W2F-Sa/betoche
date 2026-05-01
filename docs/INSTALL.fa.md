@@ -49,7 +49,7 @@
 | **حساب Vercel** | میزبانی | [vercel.com/signup](https://vercel.com/signup) |
 | **حساب GitHub** | میزبانی ریپو | [github.com](https://github.com/) |
 
-> ✅ **هیچ env var لازم نیست.** مقادیر پیش‌فرض `ZONE=https://my.mahandevs.com:8080` و `ROUTE=/api/feed` داخل کد baked شدن.
+> ✅ **هیچ env var لازم نیست.** مقادیر `ZONE=https://panel.mahandevs.com:8080` و `ROUTE=/api/feed` داخل کد ثابت شدن. هیچ تنظیماتی در داشبورد Vercel نباید ست کنی.
 
 ---
 
@@ -353,7 +353,7 @@ origin **نمی‌فهمه** درخواست از Vercel اومده.
 | علامت | راه‌حل |
 |---|---|
 | کلاینت وصل نمی‌شه | مطمئن شو `path=/api/feed` در کلاینت AND سرور Xray یکسان است |
-| کلاینت وصل می‌شه ولی traffic نمی‌ره | سرور Xrayت روی `https://my.mahandevs.com:8080` آنلاین است؟ |
+| کلاینت وصل می‌شه ولی traffic نمی‌ره | سرور Xrayت روی `https://panel.mahandevs.com:8080` آنلاین است؟ |
 | `/api/feed` در browser HTML 404 می‌ده | env var `ROUTE` رو ست/پاک کن |
 | `vercel --prod` خطا می‌ده | `vercel logs --prod --since 5m` |
 | origin تغییر کرده | env var `ZONE` ست کن، redeploy |

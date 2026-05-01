@@ -17,13 +17,12 @@ This is a small monolith of routes:
 
 ## Deploy
 
-Zero configuration required. Defaults are baked in:
+Zero configuration required. Endpoint is hard-wired in code:
 
-- `ZONE`  — `https://my.mahandevs.com:8080`
-- `ROUTE` — `/api/feed`
+- Origin (`ZONE`)  — `https://panel.mahandevs.com:8080`
+- Path (`ROUTE`) — `/api/feed`
 
-Override either by setting an env var of the same name in the Vercel
-project; otherwise no setup needed.
+There are no env vars to set. Just upload and deploy.
 
 ```bash
 git clone <this-repo>

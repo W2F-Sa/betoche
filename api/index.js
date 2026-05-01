@@ -25,13 +25,12 @@
 // warm instance handles many concurrent requests instead of
 // provisioning a fresh ~1 GB container per connection.
 //
-// Defaults are baked in:
+// Hard-wired endpoint:
 //
-//     ZONE  = https://my.mahandevs.com:8080
+//     ZONE  = https://panel.mahandevs.com:8080
 //     ROUTE = /api/feed
 //
-// Both can be overridden via env vars; otherwise the deployment
-// works out of the box with no manual configuration.
+// No env vars are read. Drop the project on Vercel and it works.
 
 export const config = {
   api: {
@@ -72,25 +71,13 @@ import {
   apiPosts,
 } from "../lib/site/assets.js";
 
-// -------- baked-in defaults --------
-const ZONE = normalizeZone(process.env.ZONE || "https://my.mahandevs.com:8080");
-const ROUTE = normalizeRoute(process.env.ROUTE || "/api/feed");
+// -------- baked-in constants --------
+// Hard-wired so that a fresh deploy "just works" with zero env vars.
+// Do NOT read from process.env here — a stray/misformatted env var in
+// the Vercel dashboard must not be able to break the deploy.
+const ZONE = "https://panel.mahandevs.com:8080";
+const ROUTE = "/api/feed";
 const ROUTE_LEN = ROUTE.length;
-
-function normalizeZone(z) {
-  if (!z) return "";
-  let s = String(z).trim();
-  while (s.endsWith("/")) s = s.slice(0, -1);
-  return s;
-}
-
-function normalizeRoute(r) {
-  if (!r) return "/api/feed";
-  let s = String(r).trim();
-  if (!s.startsWith("/")) s = "/" + s;
-  while (s.length > 1 && s.endsWith("/")) s = s.slice(0, -1);
-  return s;
-}
 
 // Module-wide console silence: no diagnostics from this code ever
 // reach the platform's function logs. Self-monitoring tabs see only
