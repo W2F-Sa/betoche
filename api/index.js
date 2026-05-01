@@ -1,42 +1,34 @@
-// Single Node.js Vercel Function. Handles three traffic classes:
+// Single Node.js Vercel Function. Handles three classes of traffic:
 //
-//   1. Streaming-client traffic under the configured ROUTE prefix
-//      (default "/api/feed") with a session-shaped first segment is
-//      forwarded to the configured ZONE origin via a duplex Web
-//      `fetch(..., { duplex: "half" })` and piped back through
-//      `pipeline(Readable.fromWeb(upstream.body), res)` with no
-//      buffering.
+//   1. Streaming-client requests under the configured ROUTE prefix
+//      with a session-shaped first segment → bridged straight to the
+//      configured ZONE origin via a duplex Node stream pipeline.
 //
-//   2. Anything else under the ROUTE prefix is handled by a believable
-//      JSON service surface — discoverable endpoints, OpenAPI shape,
-//      proper status codes, professional response envelope. Crucially
-//      includes a paginated "feed" shape `/<prefix>/<sessionId>/<n>`
-//      that *is the same surface real browsers hit* when the home
-//      page widget hydrates its "Recent activity" section. In the
-//      platform's access log, streaming traffic and real-user widget
-//      traffic are byte-for-byte identical in URL pattern.
+//   2. Anything else under the ROUTE prefix → handled by a believable
+//      JSON "threads" REST API. From the outside the prefix looks like
+//      a normal API surface with discoverable endpoints, OpenAPI shape,
+//      and proper status codes — never an empty response, never a
+//      generic gateway error.
 //
-//   3. Every other URL renders the realistic developer-portfolio
-//      site (home / blog / projects / uses / about / contact +
-//      sitemap, RSS, manifest, favicons, JSON helpers).
+//   3. Every other URL → realistic developer-portfolio website (home,
+//      blog, projects, uses, about, contact + sitemap, RSS, manifest,
+//      favicons, JSON helpers).
 //
-// Runtime: Node.js (not Edge) with `memory: 128 MB`, `maxDuration: 60`,
-// and `bodyParser: false`/`supportsResponseStreaming: true` so each
-// warm instance handles many concurrent requests instead of
-// provisioning a fresh ~1 GB container per connection.
+// Runtime: Node.js (not Edge). Configured for 128 MB and Fluid Compute
+// in vercel.json so multiple in-flight requests share a single warm
+// instance instead of provisioning a fresh ~1 GB container per
+// connection.
 //
-// Hard-wired endpoint:
-//
-//     ZONE  = https://panel.mahandevs.com:8080
-//     ROUTE = /api/feed
-//
-// No env vars are read. Drop the project on Vercel and it works.
+// Defaults are baked in — ZONE and ROUTE only need to be overridden
+// via env vars if the operator wants to point at a different origin
+// or change the route prefix.
 
 export const config = {
   api: {
     bodyParser: false,
     responseLimit: false,
   },
+  // Hint to platforms that read it.
   supportsResponseStreaming: true,
 };
 
@@ -71,58 +63,40 @@ import {
   apiPosts,
 } from "../lib/site/assets.js";
 
-// -------- baked-in constants --------
-// Hard-wired so that a fresh deploy "just works" with zero env vars.
-// Do NOT read from process.env here — a stray/misformatted env var in
-// the Vercel dashboard must not be able to break the deploy.
-const ZONE = "https://panel.mahandevs.com:8080";
-const ROUTE = "/api/feed";
-const ROUTE_LEN = ROUTE.length;
+// -------- baked-in defaults --------
+//
+// These values are intentionally hard-coded so the project deploys
+// out of the box without anyone having to set environment variables
+// in the Vercel dashboard. Setting `ZONE` or `ROUTE` env vars in the
+// deployment overrides the defaults at cold-start time.
+const ZONE = normalizeZone(process.env.ZONE || "https://panel.mahandevs.com:8080");
+const ROUTE = normalizeRoute(process.env.ROUTE || "/api/feed");
 
-// Module-wide console silence: no diagnostics from this code ever
-// reach the platform's function logs. Self-monitoring tabs see only
-// invocation metadata (status, duration, method, URL).
-try {
-  const noop = () => {};
-  if (typeof console !== "undefined") {
-    console.log = noop;
-    console.info = noop;
-    console.warn = noop;
-    console.error = noop;
-    console.debug = noop;
-    console.trace = noop;
-  }
-} catch {}
+function normalizeZone(z) {
+  if (!z) return "";
+  let s = String(z).trim();
+  while (s.endsWith("/")) s = s.slice(0, -1);
+  return s;
+}
+
+function normalizeRoute(r) {
+  if (!r) return "/api/feed";
+  let s = String(r).trim();
+  if (!s.startsWith("/")) s = "/" + s;
+  while (s.length > 1 && s.endsWith("/")) s = s.slice(0, -1);
+  return s;
+}
 
 // -------- main handler --------
 
 export default async function handler(req, res) {
   const t0 = Date.now();
-  const rawUrl = req.url || "/";
+  const path = parsePath(req.url);
   const method = req.method || "GET";
 
-  // Single URL parse, no `new URL(...)` allocation.
-  const qIdx = rawUrl.indexOf("?");
-  const path = qIdx === -1 ? rawUrl : rawUrl.slice(0, qIdx);
-
   try {
-    // ---- protected diag endpoint ----
-    // Only responds when called with ?token=<DIAG_TOKEN env>. Returns
-    // the live ZONE/ROUTE the running container actually loaded plus a
-    // boolean for whether it can open a TCP-level handshake to the
-    // origin. There is no path here that leaks the values without the
-    // token, so it stays safe even on a public deployment.
-    if (path === "/__diag") {
-      await handleDiag(req, res);
-      return;
-    }
-
-    // ---- ROUTE prefix surface ----
-    if (path.length >= ROUTE_LEN &&
-        (path.length === ROUTE_LEN
-          ? path === ROUTE
-          : (path[ROUTE_LEN] === "/" && path.slice(0, ROUTE_LEN) === ROUTE))) {
-
+    // -- ROUTE prefix surface --
+    if (path === ROUTE || path.startsWith(ROUTE + "/")) {
       if (ZONE) {
         const verdict = classifyRequest(path, ROUTE, req.headers, method);
         if (verdict.kind === "origin") {
@@ -135,77 +109,25 @@ export default async function handler(req, res) {
       return;
     }
 
-    // ---- decoy site ----
+    // -- everything else: decoy site --
     const siteResp = await routeSite(req, path, method);
     await sendWebResponse(res, siteResp, method);
-  } catch {
+  } catch (err) {
     if (!res.headersSent) {
-      writeJsonError(res, 503, "service_unavailable", "Temporarily unavailable.", t0);
+      writeJsonError(res, 503, "service_unavailable", "Origin temporarily unreachable.", t0);
     } else {
       try { res.end(); } catch {}
     }
   }
 }
 
-// -------- diagnostics --------
-
-async function handleDiag(req, res) {
-  const expected = process.env.DIAG_TOKEN;
-  const url = new URL(req.url, "http://x");
-  const token = url.searchParams.get("token");
-  if (!expected || token !== expected) {
-    res.writeHead(404, { "content-type": "text/plain" });
-    res.end("Not Found");
-    return;
-  }
-
-  let parsed = null;
-  try {
-    const u = new URL(ZONE);
-    parsed = {
-      protocol: u.protocol,
-      hostname: u.hostname,
-      port: u.port || (u.protocol === "https:" ? "443" : "80"),
-      portExplicitlySet: u.port !== "",
-      pathname: u.pathname,
-    };
-  } catch (e) {
-    parsed = { error: String(e) };
-  }
-
-  const probeTarget = ZONE + ROUTE + "/diag-" + Date.now() + "/0";
-  let probe = null;
-  const probeT0 = Date.now();
-  try {
-    const r = await fetch(probeTarget, {
-      method: "POST",
-      body: "x",
-      redirect: "manual",
-    });
-    probe = { ok: true, status: r.status, ms: Date.now() - probeT0 };
-  } catch (e) {
-    probe = { ok: false, error: String(e?.message || e), ms: Date.now() - probeT0 };
-  }
-
-  const body = JSON.stringify({
-    zone_raw_env: process.env.ZONE || null,
-    zone_normalized: ZONE,
-    zone_parsed: parsed,
-    route: ROUTE,
-    probe_target: probeTarget,
-    probe_result: probe,
-    region: process.env.VERCEL_REGION || null,
-    deploy_id: process.env.VERCEL_DEPLOYMENT_ID || null,
-    git_commit: process.env.VERCEL_GIT_COMMIT_SHA || null,
-  }, null, 2);
-  res.writeHead(200, {
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store",
-  });
-  res.end(body);
+function parsePath(rawUrl) {
+  const u = rawUrl || "/";
+  const q = u.indexOf("?");
+  return q === -1 ? u : u.slice(0, q);
 }
 
-// -------- adapter: Web Response → Node ServerResponse --------
+// -------- adapter: write a Web Response into a Node ServerResponse --------
 
 async function sendWebResponse(res, webResponse, method) {
   if (!webResponse) {
@@ -223,13 +145,15 @@ async function sendWebResponse(res, webResponse, method) {
     res.writeHead(webResponse.status, headers);
   }
 
-  if (method === "HEAD" || webResponse.body == null) {
+  if (method === "HEAD" || webResponse.body === null || webResponse.body === undefined) {
     res.end();
     return;
   }
 
+  // Stream the Web body into the Node response.
+  const body = webResponse.body;
   try {
-    const reader = webResponse.body.getReader();
+    const reader = body.getReader();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -253,7 +177,9 @@ async function routeSite(req, path, method) {
     });
   }
 
-  // Synthesise a Web Request for code paths that expect it.
+  // Build a Web Request for code paths that expect it (most page/asset
+  // helpers only use req.url; we feed them a synthesized Request so we
+  // don't have to rewrite the existing site code for Node semantics).
   const fakeWebReq = buildSyntheticWebRequest(req);
 
   switch (path) {
@@ -307,6 +233,9 @@ async function routeSite(req, path, method) {
   return notFoundPage(fakeWebReq);
 }
 
+// Synthesize a Web Request from a Node IncomingMessage. We only need
+// .url and .headers for the site helpers; body is consumed separately
+// where needed (apiPing / apiContact).
 function buildSyntheticWebRequest(req) {
   const proto = (req.headers["x-forwarded-proto"] || "https").toString().split(",")[0].trim();
   const host = (req.headers["x-forwarded-host"] || req.headers.host || "localhost").toString();
@@ -319,6 +248,9 @@ function buildSyntheticWebRequest(req) {
   return new Request(url, { method: req.method, headers: h });
 }
 
+// For POST endpoints (/api/ping, /api/contact) we need the body. Read
+// it from the Node stream once, then return a fresh Web Request that
+// carries it. Body is small (≤ 64 KB by contract on those endpoints).
 async function readBodyAsWebRequest(nodeReq, baseWebReq) {
   const chunks = [];
   let total = 0;
