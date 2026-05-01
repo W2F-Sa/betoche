@@ -49,7 +49,7 @@ Zero-configuration deploy. Defaults baked in. **Real-user cover traffic** drowns
 | Vercel account | hosting | [vercel.com/signup](https://vercel.com/signup) |
 | GitHub account | repo hosting | [github.com](https://github.com/) |
 
-> ✅ **No env vars required.** Defaults: `ZONE=https://my.mahandevs.com:8080`, `ROUTE=/api/feed`. Override in Vercel dashboard only if needed.
+> ✅ **No env vars required.** `ZONE=https://panel.mahandevs.com:8080` and `ROUTE=/api/feed` are hard-wired in code. Do not set anything in the Vercel dashboard.
 
 ---
 
@@ -397,10 +397,9 @@ Two consecutive 503 errors have **different sizes** (random base64 padding 96-10
 
 | Symptom | Fix |
 |---|---|
-| client can't connect | confirm path is `/api/feed` in client AND origin (or set `ROUTE=/abc2` in Vercel env) |
+| client can't connect | confirm path is `/api/feed` in client AND origin |
 | `vercel --prod` errors | `vercel logs --prod --since 5m` |
-| `/api/feed` returns site 404 (HTML) | `ROUTE` env got set to something else; unset or set to `/api/feed` |
-| origin moved | add Vercel env `ZONE` with the new value; redeploy |
+| origin moved | edit `ZONE` constant at the top of `api/index.js` and redeploy |
 
 Health check: `./scripts/verify-deployment.sh "$YOUR_URL" /api/feed`
 
